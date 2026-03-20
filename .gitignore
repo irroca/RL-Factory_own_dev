@@ -140,3 +140,8 @@ envs/reward_score/database/**/clean_*.csv
 **/playground
 **/wandb
 
+# Project specific
+results/
+rag_server/intfloat/
+data/
+

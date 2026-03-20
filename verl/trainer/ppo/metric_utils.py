@@ -60,20 +60,29 @@ def _compute_response_info(batch: DataProto) -> dict[str, Any]:
         A dictionary containing:
             - response_mask: Attention mask for the response tokens
             - prompt_length: Tensor of prompt lengths for each item in the batch
-            - response_length: Tensor of response lengths for each item in the batch
+            - response_length: Tensor of model-generated response lengths (excluding tool/observation tokens)
+            - total_response_length: Tensor of total response lengths (including tool/observation tokens)
     """
-    response_length = batch.batch["responses"].shape[-1]
+    max_response_length = batch.batch["responses"].shape[-1]
 
-    prompt_mask = batch.batch["attention_mask"][:, :-response_length]
-    response_mask = batch.batch["attention_mask"][:, -response_length:]
+    prompt_mask = batch.batch["attention_mask"][:, :-max_response_length]
+    response_attention_mask = batch.batch["attention_mask"][:, -max_response_length:]
 
     prompt_length = prompt_mask.sum(-1).float()
-    response_length = response_mask.sum(-1).float()  # (batch_size,)
+    total_response_length = response_attention_mask.sum(-1).float()  # (batch_size,)
+
+    # Use response_mask (loss_mask) if available to count only model-generated tokens,
+    # excluding tool/observation tokens in multi-turn interactions.
+    if "response_mask" in batch.batch:
+        model_response_length = batch.batch["response_mask"].float().sum(-1)  # (batch_size,)
+    else:
+        model_response_length = total_response_length
 
     return dict(
-        response_mask=response_mask,
+        response_mask=response_attention_mask,
         prompt_length=prompt_length,
-        response_length=response_length,
+        response_length=model_response_length,
+        total_response_length=total_response_length,
     )
 
 
@@ -156,13 +165,17 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             if use_critic
             else {}
         ),
-        # response length
+        # response length (model-generated tokens only, excluding tool/observation tokens)
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
         "response_length/min": torch.min(response_length).detach().item(),
         "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float())
         .detach()
         .item(),
+        # total response length (including tool/observation tokens)
+        "total_response_length/mean": torch.mean(response_info["total_response_length"]).detach().item(),
+        "total_response_length/max": torch.max(response_info["total_response_length"]).detach().item(),
+        "total_response_length/min": torch.min(response_info["total_response_length"]).detach().item(),
         # prompt length
         "prompt_length/mean": torch.mean(prompt_length).detach().item(),
         "prompt_length/max": torch.max(prompt_length).detach().item(),
@@ -205,7 +218,7 @@ def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> di
     """
     response_info = _compute_response_info(batch)
     num_prompt_tokens = torch.sum(response_info["prompt_length"]).item()
-    num_response_tokens = torch.sum(response_info["response_length"]).item()
+    num_response_tokens = torch.sum(response_info["total_response_length"]).item()
     num_overall_tokens = num_prompt_tokens + num_response_tokens
 
     num_tokens_of_section = {

@@ -1,13 +1,15 @@
 #!/bin/bash
-# GRPO Training Script for RL-Factory
-# This script runs Group Relative Policy Optimization (GRPO) training 
-# for reinforcement learning agents with tool-calling capabilities.
+# GRPO Training Script for Search R1 (Agent Lightning aligned)
+# This script uses the SearchR1 tool manager that aligns with Agent Lightning's approach:
+# - Uses <search>query</search> tags instead of <tool_call>
+# - No JSON schema tool definitions in system prompt
+# - Uses standard Search R1 instruction format from the paper
 
 set -e -x
 
-export MODEL_PATH=./data/models/Qwen3-4B # Student model 
-export REWARD_MODEL_PATH=./data/models/Qwen3-4B # Teacher model 
-export RESULT_DIR=./results/rl_factory/test_v2 
+export MODEL_PATH=./data/models/Qwen3-0.6B # Student model 
+export REWARD_MODEL_PATH=./data/models/Qwen3-0.6B # Teacher model 
+export RESULT_DIR=./results/rl_factory/searchr1_aligned
 
 python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     algorithm.adv_estimator=grpo\
@@ -39,10 +41,9 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     actor_rollout_ref.rollout.enforce_eager=False\
     actor_rollout_ref.rollout.free_cache_engine=True\
     actor_rollout_ref.env.name=search\
-    actor_rollout_ref.env.mcp_mode=stdio\
-    actor_rollout_ref.env.tool_manager=qwen3\
+    actor_rollout_ref.env.tool_manager=searchr1\
     actor_rollout_ref.env.enable_thinking=True\
-    actor_rollout_ref.env.config_path=envs/configs/mcp_tools.pydata\
+    actor_rollout_ref.env.config_path=null\
     actor_rollout_ref.env.use_process_reward=False\
     reward_rollout.if_use_reward_rollout=False\
     reward_rollout.rollout.tensor_model_parallel_size=4\
@@ -55,12 +56,12 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     trainer.critic_warmup=0\
     trainer.logger=['console','wandb']\
     trainer.project_name='SearchR1_with_RL-Factory'\
-    trainer.experiment_name='search_r1_Qwen3-4B'\
+    trainer.experiment_name='search_r1_Qwen3-0.6B_agl_aligned'\
     trainer.n_gpus_per_node=4\
     trainer.nnodes=1\
     trainer.val_before_train=False\
     trainer.default_local_dir=$RESULT_DIR\
     trainer.default_hdfs_dir=null\
-    trainer.save_freq=200\
-    trainer.test_freq=200\
-    trainer.total_epochs=1 $@ 2>&1 | tee grpo.log
+    trainer.save_freq=50\
+    trainer.test_freq=50\
+    trainer.total_training_steps=600 $@ 2>&1 | tee grpo_searchr1.log

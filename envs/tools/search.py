@@ -32,7 +32,7 @@ def query_rag(query: str, topk: int = 3):
         }
         
         response = requests.post(
-            "http://127.0.0.1:5003/retrieve",
+            "http://127.0.0.1:8000/retrieve",
             json=request_data,
             headers=headers,
             proxies=proxies,

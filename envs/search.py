@@ -107,13 +107,12 @@ class SearchEnv(Env):
             
             answer_format_score = format_score if check_alternate_tags(solution_str, r"</?answer>") else (-1 * format_score)
             num_score=0
+
+            # Support both <tool_call> (qwen3 format) and <search> (searchr1 format)
             if check_alternate_tags(solution_str, r"</?tool_call>"):
-                tool_call_format_score = format_score
                 pattern = r"<tool_call>(.*?)</tool_call>"
                 matches = re.findall(pattern, solution_str, re.DOTALL)
-                if len(matches) == 0:
-                    tool_call_format_score = -1 * format_score
-                else:
+                if len(matches) > 0:
                     success_num, fail_num = 0, 0
                     for idx, content in enumerate(matches):
                         content_stripped = content.strip()
@@ -122,13 +121,11 @@ class SearchEnv(Env):
                             success_num += 1
                         except json.JSONDecodeError:
                             fail_num += 1
-                    
-                    tool_call_format_score = 2 * format_score * success_num / (success_num + fail_num) - format_score
                     if success_num + fail_num > 2:
-                        tool_call_format_score -= 0.5 * format_score
                         num_score = -format_score
-            else:
-                tool_call_format_score = -0.5 * format_score
+            elif check_alternate_tags(solution_str, r"</?search>"):
+                # SearchR1 format: <search>query</search> - no JSON parsing needed
+                pass
                 
             #total_format_score = tool_call_format_score + answer_format_score
             total_format_score = answer_format_score+num_score

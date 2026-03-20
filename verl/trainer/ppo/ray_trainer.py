@@ -868,6 +868,11 @@ class RayPPOTrainer:
             metric_dict["val-aux/num_turns/min"] = sample_turns.min()
             metric_dict["val-aux/num_turns/max"] = sample_turns.max()
             metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
+            metric_dict["val/turn_count"] = sample_turns.mean()
+
+        # Add val/reward: average reward across all validation samples
+        if len(sample_scores) > 0:
+            metric_dict["val/reward"] = np.mean(sample_scores)
 
         return metric_dict
 

@@ -214,6 +214,14 @@ class vLLMRollout(BaseRollout):
 
         self.pad_token_id = tokenizer.pad_token_id
 
+        # Mask logits for token IDs beyond the tokenizer vocabulary to prevent
+        # sampling ghost tokens that exist in the padded embedding matrix but
+        # not in the tokenizer (see https://github.com/vllm-project/vllm/issues/13175)
+        _monkey_patch_compute_logits(
+            self.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model,
+            len(tokenizer),
+        )
+
     @contextmanager
     def update_sampling_params(self, **kwargs):
         # update sampling params
