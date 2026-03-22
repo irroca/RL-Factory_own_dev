@@ -5,10 +5,11 @@ from .qwen2_5_manager import Qwen25Manager
 from .qwen2_5_vl_manager import Qwen25VLManager
 from .centralized.centralized_qwen3_manager import CentralizedQwenManager
 from .searchr1_manager import SearchR1Manager
+from .multi_domain_searchr1_manager import MultiDomainSearchR1Manager
 
 
 
-__all__ = ['ConfigManager', 'QwenManager', 'Qwen25Manager','Qwen25VLManager', 'Llama3Manager', 'CentralizedQwenManager', 'SearchR1Manager']
+__all__ = ['ConfigManager', 'QwenManager', 'Qwen25Manager','Qwen25VLManager', 'Llama3Manager', 'CentralizedQwenManager', 'SearchR1Manager', 'MultiDomainSearchR1Manager']
 
 TOOL_MANAGER_REGISTRY = {
     'config': ConfigManager,
@@ -18,4 +19,5 @@ TOOL_MANAGER_REGISTRY = {
     'llama3' : Llama3Manager,
     'centralized_qwen3': CentralizedQwenManager,
     'searchr1': SearchR1Manager,
+    'multi_domain_searchr1': MultiDomainSearchR1Manager,
 }

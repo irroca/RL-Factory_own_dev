@@ -1,37 +1,28 @@
+"""
+Multi-Domain Search Environment for RL-Factory.
+
+Extends SearchEnv with domain-aware reward computation for multi-domain QA tasks.
+Supports biomedical, financial, and science domains with per-domain EM scoring.
+"""
+
 import re
 import json
 import string
 import random
 import torch
-from .base import Env
+from .search import SearchEnv
 
-class SearchEnv(Env):
+
+class MultiDomainSearchEnv(SearchEnv):
+    """Search environment for multi-domain retrieval tasks.
+
+    Inherits single-domain SearchEnv behavior (EM reward, step reward)
+    and adds per-domain score tracking for validation diagnostics.
+    """
+
     def __init__(self, config, centralized_actor=None):
         super().__init__(config, centralized_actor)
-        self.use_verify_tool = False
 
-    def get_step_reward(self, responses, format_score=0.1):
-        step_reward = []
-    
-        for response in responses:
-            temp_action, temp_tool_list = self.tool_manager.parse_response(response_content=response)
-            if temp_action == 'answer':
-                step_reward.append(torch.nan)
-            else:
-                if temp_tool_list[0]['name'] == '<empty>':
-                    step_reward.append(-0.5 * format_score)
-                else:
-                    fail_number = 0
-                    for i in range(len(temp_tool_list )):
-                        if temp_tool_list[i]['name'] == '<error>':
-                            fail_number += 1
-                    step_rew = ((len(temp_tool_list) - 2 *fail_number) / len(temp_tool_list)) * format_score
-                    step_reward.append(step_rew)
-       
-
-        return step_reward
-
-    # NOTE: Reward aligned with AGL (pure Exact Match, no format reward).
     def _compute_score_with_rules(self, data, tokenizer, if_val=False):
         def normalize_answer(s):
             def remove_articles(text):
@@ -66,10 +57,8 @@ class SearchEnv(Env):
             answer_pattern = r'<answer>(.*?)</answer>'
             match = re.finditer(answer_pattern, solution_str, re.DOTALL)
             matches = list(match)
-
             if len(matches) == 0:
                 return None
-
             return matches[-1].group(1).strip()
 
         def compute_score_em(solution_str, ground_truth, format_score=0.0, score=1.0):
@@ -81,7 +70,7 @@ class SearchEnv(Env):
                 print(f"--------------------------------")
                 print(f"Golden answers: {ground_truth['target']}")
                 print(f"Extracted answer: {answer}")
-                print(f"Solution string: {solution_str}")
+                print(f"Solution string: {solution_str[:200]}...")
 
             if answer is None:
                 return 0.0
@@ -92,14 +81,33 @@ class SearchEnv(Env):
                     return format_score
 
         scores = []
-        for i in range(len(data)):
-            data_item = data[i]  # DataProtoItem
+        domain_scores = {}  # Track per-domain scores for diagnostics
 
-            # process the data_item to the token and decode them
+        for i in range(len(data)):
+            data_item = data[i]
             processed_data = self._process_data(data_item=data_item, tokenizer=tokenizer)
             ground_truth, response_str = processed_data['ground_truth'], processed_data['response_str']
 
             score = compute_score_em(response_str, ground_truth)
             scores.append([score])
+
+            # Track per-domain scores during validation
+            if if_val:
+                extra_info = processed_data.get('extra_info', {}) or {}
+                domain = extra_info.get('domain', 'unknown')
+                if domain not in domain_scores:
+                    domain_scores[domain] = []
+                domain_scores[domain].append(score)
+
+        # Print per-domain diagnostics during validation
+        if if_val and domain_scores:
+            print("=" * 50)
+            print("Multi-Domain Validation Scores:")
+            for domain, d_scores in sorted(domain_scores.items()):
+                avg = sum(d_scores) / len(d_scores) if d_scores else 0.0
+                print(f"  {domain}: {avg:.4f} ({len(d_scores)} samples)")
+            all_scores = [s[0] for s in scores]
+            print(f"  Overall: {sum(all_scores)/len(all_scores):.4f} ({len(all_scores)} samples)")
+            print("=" * 50)
 
         return scores
