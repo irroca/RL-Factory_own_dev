@@ -1,5 +1,60 @@
 # Change Log
 
+## 2026-03-23: 恢复原 RL-Factory 多维度 Reward 作为可选模式
+
+### 背景
+
+此前（2026-03-21）为对齐 AGL 框架，将 `SearchEnv` 的 reward 简化为纯 Exact Match (EM)，移除了原 RL-Factory 的格式奖惩（format reward）、`<tool_call>` JSON 校验、XML 标签配对检查等多维度 reward 逻辑。为后续做对照实验，现将原 RL-Factory 的多维度 reward 恢复并保留为可选模式。
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `envs/search.py` | 新增 `reward_mode` 配置项，提取公共函数到模块级别，新增 `_compute_score_multi_dim()` 方法 |
+| `envs/multi_domain_search.py` | 同步支持 `reward_mode`，新增 `_compute_score_multi_dim_domain()` 方法 |
+
+### 设计
+
+通过 `config.reward_mode` 配置项切换 reward 计算方式：
+
+| `reward_mode` | 方法 | 行为 |
+|---|---|---|
+| `agl`（默认） | `_compute_score_agl()` | 纯 EM：答对 1.0，其余 0.0 |
+| `multi_dim` | `_compute_score_multi_dim()` | 原 RLF 多维度 reward（见下表） |
+
+**`multi_dim` 模式 Reward 组成：**
+
+| 组件 | 计算方式 |
+|------|----------|
+| `answer_format_score` | `<answer>` 标签配对合法 → `+format_score` ，否则 `-format_score` |
+| `tool_call_format_score` | `<tool_call>` 标签合法且 JSON 可解析 → 按成功率缩放；>2 次调用额外扣分 |
+| `total_format_score` | `answer_format_score + num_score` |
+| answer=None | `-format_score + 0.5 * total_format_score` |
+| EM match | `1.0 + 0.5 * total_format_score` |
+| EM 不匹配 | `total_format_score` |
+
+其中 `format_score` = 0.1（训练）/ 0.0（验证）。
+
+### 使用方式
+
+在训练脚本中添加 `actor_rollout_ref.env.reward_mode=multi_dim` 即可切换到原 RLF reward：
+
+```bash
+# 使用 AGL 纯 EM reward（默认，无需额外配置）
+bash main_grpo_searchr1.sh
+
+# 使用原 RLF 多维度 reward（对照实验）
+bash main_grpo_searchr1.sh actor_rollout_ref.env.reward_mode=multi_dim
+```
+
+### 代码重构说明
+
+- `normalize_answer()`、`em_check()`、`extract_solution()`、`check_alternate_tags()` 提升为模块级公共函数（加下划线前缀），`SearchEnv` 和 `MultiDomainSearchEnv` 共享
+- `_compute_score_with_rules()` 现为分发方法，根据 `reward_mode` 路由到对应实现
+- `MultiDomainSearchEnv` 的 per-domain 诊断打印抽取为 `_print_domain_diagnostics()` 静态方法，两种 reward 模式均复用
+
+---
+
 ## 2026-03-22: 新增多领域检索 Search Agent 及训练环境
 
 ### 背景
