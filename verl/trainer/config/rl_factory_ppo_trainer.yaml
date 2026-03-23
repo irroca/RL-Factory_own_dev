@@ -28,6 +28,7 @@ actor_rollout_ref:
     enable_thinking: True
     max_prompt_length: 2048
     use_process_reward: False
+    reward_mode: agl  # 'agl' (pure EM) or 'multi_dim' (original RLF format+EM reward)
     enable_limiter: False
     tool_timeout: 10            # this is the timeout for each tool call
     max_concurrency: 10         # this is the max concurrency for tool manager
