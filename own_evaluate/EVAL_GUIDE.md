@@ -6,6 +6,7 @@
 |------|------|------|
 | `eval_searchr1.py` | 全量评测，计算 EM 准确率等聚合指标 | metrics JSON + per-sample JSONL |
 | `rollout_searchr1.py` | 小样本详细 trace，记录每一轮的完整原始输入输出 | 全量 trace JSON + 可读 Markdown 报告 |
+| `simulate_rlf_training_io.py` | 模拟 RLF 训练时的多 turn token 拼接逻辑（不需要 vLLM） | 终端输出每步的 decoded token 序列 |
 
 ---
 
@@ -111,9 +112,16 @@ python rollout_searchr1.py \
 
 ### 为什么需要不同的 prompt mode
 
-两个框架（AGL 和 RLF）都通过 **OpenAI Chat Completions API** 调用 vLLM 后端。vLLM 收到请求后，会用模型的 **chat template**（如 Qwen3 的 ChatML 格式）将 messages 列表转换为带 `<|im_start|>` / `<|im_end|>` 特殊 token 的文本序列，再送入模型推理。
+两个框架（AGL 和 RLF）在训练时构造模型输入的方式不同：
 
-**vLLM 之后的处理逻辑完全一致**，区别仅在于前端构造 messages 列表的方式不同。评测时必须用和训练时一样的 messages 结构，否则 chat template 生成的 token 序列不是模型训练时见过的分布，会导致准确率大幅下降。
+- **AGL**：通过 **OpenAI Chat Completions API** 调用 vLLM，将所有历史拼接在一条 user 消息内，每轮由 vLLM 对 messages 重新 apply chat template
+- **RLF**：在 **token 层面直接拼接**——首轮对初始 messages apply 一次 chat template，后续轮次的环境反馈作为裸文本 tokenize 后直接拼接到 token 序列末尾，**不**重新 apply chat template
+
+评测时必须用和训练时一致的输入构造方式，否则模型看到的 token 序列分布不匹配，会导致准确率大幅下降。
+
+- `searchr1`：使用 Chat Completions API，匹配 AGL 训练
+- `searchr1_multiturn`：使用 Completions API + 手工 prompt 拼接，匹配 RLF `ToolUtils` 训练
+- `qwen3_tool`：使用 Completions API + 手工 ChatML prompt，匹配旧版 RLF tool-call 训练
 
 ---
 
@@ -154,29 +162,23 @@ Answer the given question... Question: What is X?<search>query</search>
 
 ### `searchr1_multiturn`（RLF 格式）
 
-**对应 RLF chat_scheduler 训练方式。** 使用正规的多轮对话结构，每轮有明确的角色分隔。
+**对应 RLF `generate_sequences_loop` + `ToolUtils` 训练方式。** 使用 Completions API 发送手工拼接的原始 prompt 字符串，严格复现训练时 token 级拼接逻辑。
 
-#### 发送给 API 的 messages
+#### 工作原理
 
-第一轮：
-```json
-[
-  {"role": "system", "content": ""},
-  {"role": "user", "content": "Answer the given question... Question: What is X?"}
-]
-```
+RLF 训练时的多 turn 交互**不是**标准的多轮对话。它在 token 层面工作：
 
-第二轮（搜索后）：
-```json
-[
-  {"role": "system", "content": ""},
-  {"role": "user", "content": "Answer the given question... Question: What is X?"},
-  {"role": "assistant", "content": "<think>reasoning...</think>\n<search>query</search>"},
-  {"role": "user", "content": "\n\n<information>Doc 1...</information>\n\n"}
-]
-```
+1. **首轮**：对初始 messages 调用一次 `apply_chat_template(enable_thinking=True)` 得到带完整角色标记的 prompt
+2. **后续每轮**：模型 response tokens（自然含 `<|im_end|>`）+ 环境反馈 tokens（直接 tokenize 原始文本，**不** apply chat template）直接拼接到序列末尾
+3. **vLLM** 每轮接收的是完整的拼接 token 序列作为 `prompt_token_ids`
 
-#### vLLM chat template 转换后模型看到的 token 序列
+为了在评测时复现这个逻辑，eval 脚本：
+- 使用 **Completions API**（`client.completions.create(prompt=...)`）而非 Chat Completions API
+- 首轮 prompt 手工构造，等价于 `apply_chat_template` 的输出
+- 后续轮次通过字符串拼接 `accumulated_prompt += raw_output + "<|im_end|>" + info_text` 模拟 token 拼接
+- 使用 `stop=["<|im_end|>", "<|endoftext|>"]` 控制生成停止
+
+#### 首轮 prompt（等价于 apply_chat_template 输出）
 
 ```
 <|im_start|>system
@@ -184,20 +186,59 @@ Answer the given question... Question: What is X?<search>query</search>
 <|im_start|>user
 Answer the given question... Question: What is X?<|im_end|>
 <|im_start|>assistant
-<search>query</search><|im_end|>
-<|im_start|>user
+<think>
+```
 
-<information>Doc 1...</information>
+#### 第二轮 prompt（搜索后，token 级拼接）
 
+```
+<|im_start|>system
 <|im_end|>
+<|im_start|>user
+Answer the given question... Question: What is X?<|im_end|>
 <|im_start|>assistant
+<think>
+<think>                                          ← vLLM 生成的 response 开头
+I need to find... Let me search.
+</think>
+
+<search>query</search><|im_end|>                ← response 自然结束
+
+<information>Doc 1(Title: ...) text...           ← 环境反馈，直接拼接，无角色标记
+Doc 2(Title: ...) text...
+</information>
+
+```
+
+**注意**：环境反馈 `<information>` 块前后**没有** `<|im_start|>user`、`<|im_end|>`、`<|im_start|>assistant` 等角色标记。模型从 `</information>\n\n` 后直接续写，这与训练时的行为完全一致。
+
+#### 完整 3 轮交互的 token 序列
+
+```
+[PROMPT: apply_chat_template 输出，有完整角色标记]
+<|im_start|>system\n<|im_end|>\n<|im_start|>user\n{instruction+question}<|im_end|>\n<|im_start|>assistant\n<think>\n
+
+[RESPONSE 1: vLLM 生成，loss_mask=1]
+<think>\nI need to find...\n</think>\n\n<search>query1</search><|im_end|>
+
+[INFO 1: 环境反馈，裸文本 tokenize，loss_mask=0]
+\n\n<information>Doc 1... Doc 3\n</information>\n\n
+
+[RESPONSE 2: vLLM 生成，loss_mask=1]
+<think>\nBased on search results...\n</think>\n\n<search>query2</search><|im_end|>
+
+[INFO 2: 环境反馈，裸文本 tokenize，loss_mask=0]
+\n\n<information>Doc 1... Doc 3\n</information>\n\n
+
+[RESPONSE 3: vLLM 生成，loss_mask=1]
+<think>\nI have confirmed...\n</think>\n\n<answer>Paris</answer><|im_end|>
 ```
 
 **特点：**
-- 有 system 消息但**内容为空**（与 RLF 训练一致，chat_scheduler 对空 system content 调用 `apply_chat_template` 产生的就是空内容）
-- 模型回复和搜索结果分别是独立的 assistant / user 消息
-- 中间 assistant 消息中的 `<think>` 标签会被 Qwen3 chat template **自动剥离**（`enable_thinking=True` 时的行为）
-- 通过 `extra_body={"chat_template_kwargs": {"enable_thinking": True}}` 传递给 vLLM，与训练时一致
+- 使用 Completions API 直接发送原始 prompt 字符串
+- 只有首轮 prompt 有完整的角色标记（`<|im_start|>system/user/assistant`）
+- 后续轮次的环境反馈是**裸文本拼接**，无角色标记
+- 与训练时 `ToolUtils.postprocess_output()` 的 token 拼接逻辑完全一致
 
 ---
 
@@ -244,10 +285,10 @@ Doc 1...
 
 | 维度 | `searchr1` (AGL) | `searchr1_multiturn` (RLF) | `qwen3_tool` (旧版 RLF) |
 |------|---|---|---|
-| API | Chat Completions | Chat Completions | Completions (raw prompt) |
-| System 消息 | 无 | 有，内容为空 `""` | 有，包含 tool schema |
-| 多轮结构 | 单条 user 消息拼接全部历史 | 多轮 system/user/assistant 交替 | 手工拼接多轮 ChatML tokens |
+| API | Chat Completions | **Completions** (raw prompt) | Completions (raw prompt) |
+| System 消息 | 无 | 有，内容为空（首轮 prompt 的一部分） | 有，包含 tool schema |
+| 多轮结构 | 单条 user 消息拼接全部历史 | **Token 级拼接**：首轮 chat template + 后续裸文本拼接 | 手工拼接多轮 ChatML tokens |
 | 搜索指令 | `<search>query</search>` | `<search>query</search>` | `<tool_call>{"name":...}</tool_call>` |
 | 搜索结果 | `<information>...</information>` | `<information>...</information>` | `<tool_response>...</tool_response>` |
-| enable_thinking | 不传 | True | N/A（手工注入空 think block） |
-| think 标签处理 | 保留在拼接文本中 | 被 chat template 自动剥离 | 手工注入空 think block |
+| 角色标记 | 每轮重新 apply（仅一条 user 消息） | 仅首轮有，后续无角色标记 | 每轮手工拼 ChatML 标记 |
+| enable_thinking | 不传 | 首轮 prompt 中包含 `<think>\n` | N/A（手工注入空 think block） |

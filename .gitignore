@@ -145,3 +145,5 @@ results/
 rag_server/intfloat/
 data/
 
+own_evaluate/rollout_results_new
+own_evaluate/rollout_results_new_agl

@@ -211,6 +211,29 @@ def build_messages_searchr1_multiturn(
     return messages
 
 
+def build_initial_prompt_searchr1_multiturn(question: str) -> str:
+    """Build initial raw prompt matching RLF training's token-level format.
+
+    Reproduces tokenizer.apply_chat_template(
+        [{"role": "system", "content": ""},
+         {"role": "user", "content": INSTRUCTION_FORMAT + question}],
+        add_generation_prompt=True, enable_thinking=True, tokenize=False)
+
+    Subsequent turns are built by raw string concatenation:
+        accumulated += response + "<|im_end|>" + raw_info_text
+    matching the token-level concatenation in RLF training's ToolUtils
+    (no additional role markers between turns).
+    """
+    return (
+        f"{_IM_START}system\n"
+        f"{_IM_END}\n"
+        f"{_IM_START}user\n"
+        f"{INSTRUCTION_FORMAT}{question}{_IM_END}\n"
+        f"{_IM_START}assistant\n"
+        f"<think>\n"
+    )
+
+
 def build_raw_prompt_qwen3_tool(
     question: str,
     assistant_responses: List[str],
@@ -256,6 +279,7 @@ def run_sample_rollout(
     data_source: str,
     temperature: float = 0.0,
     max_turns: int = 4,
+    max_tokens: int = 2048,
     retrieval_url: str = "http://127.0.0.1:8000/retrieve",
     prompt_mode: str = "searchr1",
 ) -> Dict[str, Any]:
@@ -271,8 +295,8 @@ def run_sample_rollout(
 
     qwen3_asst_responses: List[str] = []
     qwen3_tool_responses: List[str] = []
-    mt_asst_responses: List[str] = []
-    mt_user_feedbacks: List[str] = []
+    # searchr1_multiturn mode: accumulated raw prompt (matches RLF token concatenation)
+    accumulated_prompt = ""
 
     t_start = time.time()
 
@@ -289,23 +313,22 @@ def run_sample_rollout(
                     model=model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=500,
+                    max_tokens=max_tokens,
                 )
                 raw_output = resp.choices[0].message.content or ""
                 usage = resp.usage
             elif prompt_mode == "searchr1_multiturn":
-                messages = build_messages_searchr1_multiturn(
-                    question, mt_asst_responses, mt_user_feedbacks,
-                )
-                raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
-                resp = client.chat.completions.create(
+                if not accumulated_prompt:
+                    accumulated_prompt = build_initial_prompt_searchr1_multiturn(question)
+                raw_input = accumulated_prompt
+                resp = client.completions.create(
                     model=model,
-                    messages=messages,
+                    prompt=accumulated_prompt,
                     temperature=temperature,
-                    max_tokens=500,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                    max_tokens=max_tokens,
+                    stop=[_IM_END, "<|endoftext|>"],
                 )
-                raw_output = resp.choices[0].message.content or ""
+                raw_output = resp.choices[0].text or ""
                 usage = resp.usage
             else:
                 raw_input = build_raw_prompt_qwen3_tool(
@@ -315,7 +338,7 @@ def run_sample_rollout(
                     model=model,
                     prompt=raw_input,
                     temperature=temperature,
-                    max_tokens=500,
+                    max_tokens=max_tokens,
                     stop=[_IM_END, "<|endoftext|>"],
                 )
                 raw_output = resp.choices[0].text or ""
@@ -347,7 +370,7 @@ def run_sample_rollout(
                 if prompt_mode == "qwen3_tool":
                     qwen3_asst_responses.append(valid_resp)
                 elif prompt_mode == "searchr1_multiturn":
-                    mt_asst_responses.append(valid_resp)
+                    accumulated_prompt += raw_output
             elif action == "search":
                 search_queries.append(action_content)
                 t_ret = time.time()
@@ -358,10 +381,9 @@ def run_sample_rollout(
                 if prompt_mode == "searchr1":
                     rollout_content += f"\n\n<information>{search_result}</information>\n\n"
                 elif prompt_mode == "searchr1_multiturn":
-                    mt_asst_responses.append(valid_resp)
-                    feedback = f"\n\n<information>{search_result}</information>\n\n"
-                    mt_user_feedbacks.append(feedback)
-                    rollout_content += feedback
+                    info_text = f"\n\n<information>{search_result}</information>\n\n"
+                    accumulated_prompt += raw_output + _IM_END + info_text
+                    rollout_content += info_text
                 else:
                     qwen3_asst_responses.append(valid_resp)
                     qwen3_tool_responses.append(search_result)
@@ -376,14 +398,13 @@ def run_sample_rollout(
                         "Let me try again.\n"
                     )
                 elif prompt_mode == "searchr1_multiturn":
-                    mt_asst_responses.append(valid_resp)
                     retry_msg = (
                         "\nMy previous action is invalid. If I want to search, I should put "
                         "the query between <search> and </search>. If I want to give the final "
                         "answer, I should put the answer between <answer> and </answer>. "
                         "Let me try again.\n"
                     )
-                    mt_user_feedbacks.append(retry_msg)
+                    accumulated_prompt += raw_output + _IM_END + retry_msg
                 else:
                     retry_msg = (
                         "Your previous response did not contain a valid tool call or answer. "
@@ -407,23 +428,20 @@ def run_sample_rollout(
                     model=model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=500,
+                    max_tokens=max_tokens,
                 )
                 raw_output = resp.choices[0].message.content or ""
                 usage = resp.usage
             elif prompt_mode == "searchr1_multiturn":
-                messages = build_messages_searchr1_multiturn(
-                    question, mt_asst_responses, mt_user_feedbacks,
-                )
-                raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
-                resp = client.chat.completions.create(
+                raw_input = accumulated_prompt
+                resp = client.completions.create(
                     model=model,
-                    messages=messages,
+                    prompt=accumulated_prompt,
                     temperature=temperature,
-                    max_tokens=500,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                    max_tokens=max_tokens,
+                    stop=[_IM_END, "<|endoftext|>"],
                 )
-                raw_output = resp.choices[0].message.content or ""
+                raw_output = resp.choices[0].text or ""
                 usage = resp.usage
             else:
                 raw_input = build_raw_prompt_qwen3_tool(
@@ -433,7 +451,7 @@ def run_sample_rollout(
                     model=model,
                     prompt=raw_input,
                     temperature=temperature,
-                    max_tokens=500,
+                    max_tokens=max_tokens,
                     stop=[_IM_END, "<|endoftext|>"],
                 )
                 raw_output = resp.choices[0].text or ""
@@ -580,6 +598,8 @@ def main() -> None:
                              "'qwen3_tool' (legacy RLF). "
                              "Default: auto-detect from --label (rlf -> searchr1_multiturn, else searchr1)")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-tokens", type=int, default=2048,
+                        help="Max tokens per turn (default: 2048). Training has no per-turn limit.")
     parser.add_argument("--max-turns", type=int, default=4)
     parser.add_argument("--api-key", type=str, default=None)
     parser.add_argument("--retrieval-url", type=str, default="http://127.0.0.1:8000/retrieve")
@@ -620,6 +640,7 @@ def main() -> None:
             question=sample["question"], golden_answers=golden,
             sample_id=sid, data_source=dsrc,
             temperature=args.temperature, max_turns=args.max_turns,
+            max_tokens=args.max_tokens,
             retrieval_url=args.retrieval_url,
             prompt_mode=args.prompt_mode,
         )
