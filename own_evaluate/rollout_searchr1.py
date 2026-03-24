@@ -573,11 +573,12 @@ def main() -> None:
                         help="Path to test parquet file")
     parser.add_argument("--n-samples", type=int, default=100,
                         help="Number of samples to trace (default: 100)")
-    parser.add_argument("--prompt-mode", type=str, default="searchr1",
+    parser.add_argument("--prompt-mode", type=str, default=None,
                         choices=["searchr1", "searchr1_multiturn", "qwen3_tool"],
                         help="Prompt format: 'searchr1' (AGL, single user msg), "
                              "'searchr1_multiturn' (RLF, multi-turn chat), "
-                             "'qwen3_tool' (legacy RLF). Default: searchr1")
+                             "'qwen3_tool' (legacy RLF). "
+                             "Default: auto-detect from --label (rlf -> searchr1_multiturn, else searchr1)")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-turns", type=int, default=4)
     parser.add_argument("--api-key", type=str, default=None)
@@ -586,6 +587,14 @@ def main() -> None:
     parser.add_argument("--label", type=str, default="rollout",
                         help="Label prefix for output files (default: rollout)")
     args = parser.parse_args()
+
+    # Auto-detect prompt mode from label
+    # AGL uses searchr1 (single user message), RLF uses searchr1_multiturn (proper multi-turn chat).
+    if args.prompt_mode is None:
+        if args.label == "rlf":
+            args.prompt_mode = "searchr1_multiturn"
+        else:
+            args.prompt_mode = "searchr1"
 
     if not os.path.exists(args.data_file):
         print(f"Error: Data file not found: {args.data_file}", file=sys.stderr)

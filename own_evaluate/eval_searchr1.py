@@ -365,6 +365,20 @@ def evaluate_sample(
                 )
                 raw = resp.choices[0].message.content or ""
                 usage = resp.usage
+            elif prompt_mode == "searchr1_multiturn":
+                messages = _build_messages_searchr1_multiturn(
+                    question, mt_asst_responses, mt_user_feedbacks,
+                )
+                input_prompt_for_log = json.dumps(messages, ensure_ascii=False, indent=2)
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=500,
+                    extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                )
+                raw = resp.choices[0].message.content or ""
+                usage = resp.usage
             else:
                 raw_prompt = _build_raw_prompt_qwen3_tool(
                     question, qwen3_asst_responses, qwen3_tool_responses,
