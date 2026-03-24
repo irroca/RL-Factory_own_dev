@@ -1,5 +1,68 @@
 # Change Log
 
+## 2026-03-24: 新增 AGL 风格消息构建模式 (searchr1_agl)
+
+### 背景
+
+AGL 框架（Agent Lightning）与 RLF 在多轮 LLM 调用时的消息拼接方式存在差异：
+
+| 维度 | RLF SearchR1 (原) | AGL |
+|------|-------------------|-----|
+| 环境反馈格式 | 原始文本直接拼接，无角色标记 | 作为 user 消息发送，每次调用都重新应用 chat template |
+| Token 序列 | `...<\|im_start\|>assistant\n{resp}\n\n<information>...\n\n{resp2}...` | `...{resp}<\|im_end\|>\n<\|im_start\|>user\n<information>...<\|im_end\|>\n<\|im_start\|>assistant\n{resp2}...` |
+| 角色转换 | 无（所有后续内容都在一个 assistant turn 内） | 有（environment feedback → user turn → 新 assistant turn） |
+
+为支持公平对照实验，现新增 AGL 风格的消息构建模式，将环境反馈（检索结果）包装为 user-role 消息并应用 chat template，使 token 序列具有显式的 user↔assistant 交替标记。
+
+### 新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `envs/tool_manager/searchr1_agl_manager.py` | AGL 风格消息构建的 Tool Manager，包含 `SearchR1AGLManager` 和 `MultiDomainSearchR1AGLManager` 两个类 |
+| `main_grpo_searchr1_agl.sh` | 使用 AGL 风格消息构建的 GRPO 训练脚本，超参数与 `main_grpo_searchr1.sh` 完全一致 |
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `envs/tool_manager/__init__.py` | 注册 `searchr1_agl` → `SearchR1AGLManager`，`multi_domain_searchr1_agl` → `MultiDomainSearchR1AGLManager` |
+
+### 关键设计
+
+核心差异在 `get_prompt(mode='tool_call')` 方法：
+
+| 模式 | `get_prompt(mode='tool_call')` 行为 |
+|------|--------------------------------------|
+| `searchr1`（原） | 返回原始文本，不添加任何 chat template 标记 |
+| `searchr1_agl`（新） | 使用 `apply_chat_template` 将内容包装为 user-role 消息，添加 `<\|im_start\|>user` / `<\|im_end\|>` / `<\|im_start\|>assistant` 标记 |
+
+AGL 风格使用 Qwen3Manager 相同的 base-prompt 减法技巧：构造 dummy base_chat → 拼接实际消息 → apply_chat_template → 减去 base 前缀，得到纯净的角色标记 + 内容。
+
+### 使用方式
+
+```bash
+# 方式一：使用 AGL 风格消息构建的训练脚本（单域检索）
+bash main_grpo_searchr1_agl.sh
+
+# 方式二：在现有脚本中切换 tool_manager 即可
+bash main_grpo_searchr1.sh actor_rollout_ref.env.tool_manager=searchr1_agl
+
+# 方式三：多领域检索 + AGL 风格
+bash main_grpo_multi_domain_search.sh actor_rollout_ref.env.tool_manager=multi_domain_searchr1_agl
+```
+
+对照实验建议：
+
+```bash
+# 实验组 A：原 RLF 消息构建
+bash main_grpo_searchr1.sh
+
+# 实验组 B：AGL 风格消息构建
+bash main_grpo_searchr1_agl.sh
+```
+
+---
+
 ## 2026-03-23: 恢复原 RL-Factory 多维度 Reward 作为可选模式
 
 ### 背景
