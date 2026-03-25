@@ -20,6 +20,20 @@
 #          --local_dir ./data/multi_domain_search
 #
 # Hyperparameters are aligned with main_grpo_searchr1.sh for fair comparison.
+#
+# Configuration switches (append to command line to override):
+#   Reward mode:
+#     actor_rollout_ref.env.reward_mode=agl        # (default) pure Exact Match
+#     actor_rollout_ref.env.reward_mode=multi_dim   # EM + format reward (search/domain/answer tag validity)
+#
+#   Interaction format (tool_manager):
+#     actor_rollout_ref.env.tool_manager=multi_domain_searchr1            # (default) raw text concatenation (Search R1 style)
+#     actor_rollout_ref.env.tool_manager=multi_domain_searchr1_multistep  # user→assistant turn alternation
+#
+#   Example: use multistep format with multi-dim reward:
+#     bash main_grpo_multi_domain_search.sh \
+#         actor_rollout_ref.env.tool_manager=multi_domain_searchr1_multistep \
+#         actor_rollout_ref.env.reward_mode=multi_dim
 
 set -e -x
 

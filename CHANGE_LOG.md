@@ -1,5 +1,138 @@
 # Change Log
 
+## 2026-03-25: 统一命名：训练配置与推理模式名称对齐
+
+### 背景
+
+原有命名存在歧义：`searchr1_agl` 暗示与 AGL 框架对齐，但实际行为（user→assistant turn 交替）与 AGL（单条 user 消息拼接）不同。同时 eval 脚本的 prompt mode 名称与训练 tool_manager 名称不一致，容易混淆。
+
+### 命名变更
+
+| 旧名称 | 新名称 | 说明 |
+|--------|--------|------|
+| `searchr1_agl` (tool_manager) | `searchr1_multistep` | 反映实际行为：多步 user→assistant 交替 |
+| `multi_domain_searchr1_agl` (tool_manager) | `multi_domain_searchr1_multistep` | 同上，多领域版本 |
+| `SearchR1AGLManager` (类名) | `SearchR1MultistepManager` | 类名同步 |
+| `MultiDomainSearchR1AGLManager` (类名) | `MultiDomainSearchR1MultistepManager` | 类名同步 |
+| `searchr1_agl_manager.py` (文件) | `searchr1_multistep_manager.py` | 文件同步 |
+| `main_grpo_searchr1_agl.sh` (脚本) | `main_grpo_searchr1_multistep.sh` | 脚本同步 |
+
+**Eval prompt mode 统一对齐（与训练 tool_manager 名称一致）：**
+
+| 旧 prompt_mode | 新 prompt_mode | 对应训练 | `--label` 自动检测 |
+|---|---|---|---|
+| `searchr1` | `agl` | AGL 框架 | 默认 / `agl` |
+| `searchr1_multiturn` | `searchr1` | RLF `tool_manager=searchr1` | `rlf` |
+| `searchr1_agl` | `searchr1_multistep` | RLF `tool_manager=searchr1_multistep` | `rlf_multistep` |
+| `qwen3_tool` | `qwen3_tool`（不变） | legacy RLF `<tool_call>` | 需手动指定 |
+
+### 修改/重命名文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `envs/tool_manager/searchr1_multistep_manager.py` | 由 `searchr1_agl_manager.py` 重命名，类名 `→ SearchR1MultistepManager` / `MultiDomainSearchR1MultistepManager` |
+| `envs/tool_manager/__init__.py` | 注册表更新为 `searchr1_multistep` / `multi_domain_searchr1_multistep` |
+| `main_grpo_searchr1_multistep.sh` | 由 `main_grpo_searchr1_agl.sh` 重命名，内部引用同步更新 |
+| `main_grpo_multi_domain_search.sh` | 注释中的 `searchr1_agl` 引用更新为 `searchr1_multistep` |
+| `own_evaluate/eval_searchr1.py` | prompt mode 全部重命名，移除未使用的 `_build_messages_searchr1_multiturn` 函数 |
+
+### 使用方式
+
+```bash
+# === 训练 ===
+bash main_grpo_searchr1.sh                # searchr1 模式（原始文本拼接）
+bash main_grpo_searchr1_multistep.sh      # searchr1_multistep 模式（user→assistant 交替）
+
+# === 推理 ===
+# AGL 训练的模型
+python eval_searchr1.py --label agl ...
+# RLF searchr1 训练的模型
+python eval_searchr1.py --label rlf ...
+# RLF searchr1_multistep 训练的模型
+python eval_searchr1.py --label rlf_multistep ...
+# 或显式指定
+python eval_searchr1.py --prompt-mode agl ...
+python eval_searchr1.py --prompt-mode searchr1 ...
+python eval_searchr1.py --prompt-mode searchr1_multistep ...
+```
+
+---
+
+## 2026-03-25: 修复 searchr1_agl 训练-推理对齐 & 修复 searchr1_multiturn eval
+
+### 背景
+
+经过详细分析 vLLM rollout 的 stop token 行为（`include_stop_str_in_output=False` 默认值），发现：
+
+1. **Response tokens 不包含 `<|im_end|>`**：vLLM 使用字符串级 `stop=["<|im_end|>"]`，默认不将 stop 字符串包含在输出 `token_ids` 中
+2. **`searchr1_agl` 原实现有误**：使用 chat template 减法技巧但缺少 `<|im_end|>` 关闭前一个 assistant turn，导致 token 序列不合法
+3. **`searchr1_multiturn` eval 与训练不对齐**：eval 在 response 和 info 之间添加了 `<|im_end|>`，但训练中 response tokens 不含 `<|im_end|>`
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `envs/tool_manager/searchr1_agl_manager.py` | 重写 `_agl_style_get_prompt`：改用直接字符串构建，显式添加 `<|im_end|>\n` 关闭 assistant turn，正确构建 `user→assistant` 转换标记 |
+| `own_evaluate/eval_searchr1.py` | 1) 修复 `searchr1_multiturn` 模式：移除 resp→info 之间的 `<|im_end|>`（与训练对齐）；2) 新增 `searchr1_agl` eval 模式；3) 新增 `rlf_agl` label 自动映射 |
+
+### 三种模式的训练 token 序列对比
+
+以下对比基于 vLLM response tokens **不含** `<|im_end|>` 的事实：
+
+| 训练模式 | resp1 → info → resp2 的 token 序列 |
+|---|---|
+| `searchr1` (RLF 原生) | `{resp1}\n\n<information>...\n\n{resp2}` — 无 `<|im_end|>`，无角色标记，一个长 assistant turn 内接龙 |
+| `searchr1_agl` (修复后) | `{resp1}<\|im_end\|>\n<\|im_start\|>user\n{info}<\|im_end\|>\n<\|im_start\|>assistant\n<think>\n{resp2}` — 显式关闭 assistant turn，user 消息包裹 info，新开 assistant turn |
+| AGL (Agent Lightning) | 不可直接比较：每轮都从头构建单条 user 消息（含所有历史），resp1 在 user content 内部 |
+
+### eval 推理模式对应关系
+
+| eval `--prompt-mode` | 对应训练配置 | auto-detect `--label` |
+|---|---|---|
+| `searchr1` | AGL (Agent Lightning) | `agl` (默认) |
+| `searchr1_multiturn` | RLF `tool_manager=searchr1` | `rlf` |
+| `searchr1_agl` | RLF `tool_manager=searchr1_agl` | `rlf_agl` |
+| `qwen3_tool` | RLF legacy `<tool_call>` 格式 | 需手动指定 |
+
+### 使用方式
+
+```bash
+# 训练：使用 searchr1_agl tool manager
+bash main_grpo_searchr1_agl.sh
+
+# 评估：searchr1_agl 模式自动匹配
+python own_evaluate/eval_searchr1.py \
+    --endpoint http://localhost:8001/v1 \
+    --model <checkpoint> \
+    --data-file <test.parquet> \
+    --label rlf_agl
+
+# 或显式指定 prompt-mode
+python own_evaluate/eval_searchr1.py --prompt-mode searchr1_agl ...
+```
+
+### 修复的技术细节
+
+**`searchr1_agl` `get_prompt(mode='tool_call')` 修复前后对比：**
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 方法 | `apply_chat_template` 减法技巧 | 直接字符串构建 |
+| `<|im_end|>` 关闭 | ❌ 未添加（依赖 response 含 `<|im_end|>`,实际不含） | ✅ 显式添加 `<|im_end|>\n` |
+| 生成起始 | `<|im_start|>assistant\n<think>\n`（但前面缺关闭标记） | `<|im_end|>\n<|im_start|>user\n{info}<|im_end|>\n<|im_start|>assistant\n<think>\n` |
+
+**`searchr1_multiturn` eval 修复：**
+
+```python
+# 修复前（与训练不对齐）：
+accumulated_prompt += raw + _IM_END + info_text  # 多加了 <|im_end|>
+
+# 修复后（与训练对齐）：
+accumulated_prompt += raw + info_text  # response 和 info 之间无 <|im_end|>
+```
+
+---
+
 ## 2026-03-24: 新增 AGL 风格消息构建模式 (searchr1_agl)
 
 ### 背景

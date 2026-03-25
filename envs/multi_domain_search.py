@@ -105,30 +105,25 @@ class MultiDomainSearchEnv(SearchEnv):
                 print(f"[multi_dim] Solution string: {solution_str[:200]}...")
 
             answer_format_score = format_score if _check_alternate_tags(solution_str, r"</?answer>") else (-1 * format_score)
-            num_score = 0
-            if _check_alternate_tags(solution_str, r"</?tool_call>"):
-                tool_call_format_score = format_score
-                pattern = r"<tool_call>(.*?)</tool_call>"
-                matches = re.findall(pattern, solution_str, re.DOTALL)
-                if len(matches) == 0:
-                    tool_call_format_score = -1 * format_score
-                else:
-                    success_num, fail_num = 0, 0
-                    for idx, content in enumerate(matches):
-                        content_stripped = content.strip()
-                        try:
-                            parsed = json.loads(content_stripped)
-                            success_num += 1
-                        except json.JSONDecodeError:
-                            fail_num += 1
-                    tool_call_format_score = 2 * format_score * success_num / (success_num + fail_num) - format_score
-                    if success_num + fail_num > 2:
-                        tool_call_format_score -= 0.5 * format_score
-                        num_score = -format_score
-            else:
-                tool_call_format_score = -0.5 * format_score
 
-            total_format_score = answer_format_score + num_score
+            # Check <search>/<domain> tag format (multi-domain search uses these instead of <tool_call>)
+            search_format_score = 0
+            search_tags = re.findall(r'<search>.*?</search>', solution_str, re.DOTALL)
+            domain_tags = re.findall(r'<domain>.*?</domain>', solution_str, re.DOTALL)
+            if search_tags:
+                # Has search tags — check that <search> and <domain> are properly alternating
+                search_ok = _check_alternate_tags(solution_str, r"</?search>")
+                domain_ok = _check_alternate_tags(solution_str, r"</?domain>")
+                if search_ok and domain_ok and len(search_tags) == len(domain_tags):
+                    search_format_score = format_score
+                elif search_ok:
+                    # search tags are valid but domain tags missing or mismatched
+                    search_format_score = 0.5 * format_score
+                else:
+                    search_format_score = -0.5 * format_score
+            # else: no search tags at all — no penalty (model may answer directly)
+
+            total_format_score = answer_format_score + search_format_score
 
             if answer is None:
                 return -1 * format_score + 0.5 * total_format_score

@@ -17,7 +17,7 @@ vLLM uses include_stop_str_in_output=False by default):
     \\n\\n<information>...\\n\\n             ← raw info text appended directly
     {resp2}                              ← model continues generating
 
-  SearchR1AGLManager (user→assistant turn alternation):
+  SearchR1MultistepManager (user→assistant turn alternation):
     <|im_start|>user\\n{Q}<|im_end|>\\n<|im_start|>assistant\\n<think>\\n
     {resp1}                              ← model generates (no <|im_end|> in tokens)
     <|im_end|>\\n<|im_start|>user\\n      ← close assistant, open user turn
@@ -31,7 +31,7 @@ from envs.tool_manager.searchr1_manager import SearchR1Manager
 from envs.tool_manager.multi_domain_searchr1_manager import MultiDomainSearchR1Manager
 
 
-def _agl_style_get_prompt(input_data, tokenizer, verl_config, add_generation_prompt):
+def _multistep_get_prompt(input_data, tokenizer, verl_config, add_generation_prompt):
     """Build prompt that creates explicit user→assistant turn alternation.
 
     Since vLLM response tokens do NOT include <|im_end|> (include_stop_str_in_output
@@ -68,7 +68,7 @@ def _agl_style_get_prompt(input_data, tokenizer, verl_config, add_generation_pro
     return result
 
 
-class SearchR1AGLManager(SearchR1Manager):
+class SearchR1MultistepManager(SearchR1Manager):
     """
     SearchR1 manager with explicit user→assistant turn alternation.
 
@@ -89,16 +89,16 @@ class SearchR1AGLManager(SearchR1Manager):
         if mode == 'initial':
             return super().get_prompt(input_data, tokenizer, mode, add_generation_prompt)
         elif mode in ['tool_call', 'assistant_response']:
-            return _agl_style_get_prompt(input_data, tokenizer, self.verl_config, add_generation_prompt)
+            return _multistep_get_prompt(input_data, tokenizer, self.verl_config, add_generation_prompt)
         else:
             raise ValueError(f'Invalid mode: {mode}')
 
 
-class MultiDomainSearchR1AGLManager(MultiDomainSearchR1Manager):
+class MultiDomainSearchR1MultistepManager(MultiDomainSearchR1Manager):
     """
     Multi-domain SearchR1 manager with explicit user→assistant turn alternation.
 
-    Same behavior as SearchR1AGLManager but for multi-domain search.
+    Same behavior as SearchR1MultistepManager but for multi-domain search.
     """
 
     def get_prompt(self, input_data, tokenizer, mode='initial', add_generation_prompt=True):
@@ -107,6 +107,6 @@ class MultiDomainSearchR1AGLManager(MultiDomainSearchR1Manager):
         if mode == 'initial':
             return super().get_prompt(input_data, tokenizer, mode, add_generation_prompt)
         elif mode in ['tool_call', 'assistant_response']:
-            return _agl_style_get_prompt(input_data, tokenizer, self.verl_config, add_generation_prompt)
+            return _multistep_get_prompt(input_data, tokenizer, self.verl_config, add_generation_prompt)
         else:
             raise ValueError(f'Invalid mode: {mode}')

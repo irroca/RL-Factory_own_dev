@@ -6,11 +6,11 @@ from .qwen2_5_vl_manager import Qwen25VLManager
 from .centralized.centralized_qwen3_manager import CentralizedQwenManager
 from .searchr1_manager import SearchR1Manager
 from .multi_domain_searchr1_manager import MultiDomainSearchR1Manager
-from .searchr1_agl_manager import SearchR1AGLManager, MultiDomainSearchR1AGLManager
+from .searchr1_multistep_manager import SearchR1MultistepManager, MultiDomainSearchR1MultistepManager
 
 
 
-__all__ = ['ConfigManager', 'QwenManager', 'Qwen25Manager','Qwen25VLManager', 'Llama3Manager', 'CentralizedQwenManager', 'SearchR1Manager', 'MultiDomainSearchR1Manager', 'SearchR1AGLManager', 'MultiDomainSearchR1AGLManager']
+__all__ = ['ConfigManager', 'QwenManager', 'Qwen25Manager','Qwen25VLManager', 'Llama3Manager', 'CentralizedQwenManager', 'SearchR1Manager', 'MultiDomainSearchR1Manager', 'SearchR1MultistepManager', 'MultiDomainSearchR1MultistepManager']
 
 TOOL_MANAGER_REGISTRY = {
     'config': ConfigManager,
@@ -21,6 +21,6 @@ TOOL_MANAGER_REGISTRY = {
     'centralized_qwen3': CentralizedQwenManager,
     'searchr1': SearchR1Manager,
     'multi_domain_searchr1': MultiDomainSearchR1Manager,
-    'searchr1_agl': SearchR1AGLManager,
-    'multi_domain_searchr1_agl': MultiDomainSearchR1AGLManager,
+    'searchr1_multistep': SearchR1MultistepManager,
+    'multi_domain_searchr1_multistep': MultiDomainSearchR1MultistepManager,
 }

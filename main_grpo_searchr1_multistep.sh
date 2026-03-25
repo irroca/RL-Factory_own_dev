@@ -1,9 +1,8 @@
 #!/bin/bash
-# GRPO Training Script for Search R1 — AGL-aligned message construction
+# GRPO Training Script for Search R1 — Multistep mode
 #
-# This script uses the SearchR1AGLManager which wraps environment feedback
-# (search results) as user-role messages with proper chat template markers,
-# matching Agent Lightning's approach:
+# This script uses the SearchR1MultistepManager which wraps environment feedback
+# (search results) as user-role messages with proper chat template markers:
 #   - Environment feedback → <|im_start|>user\n...<|im_end|>\n<|im_start|>assistant\n
 #   - Creates explicit user→assistant turn alternation
 #   - Vs. the base searchr1 manager which concatenates raw text without role markers
@@ -14,7 +13,7 @@ set -e -x
 
 export MODEL_PATH=./data/models/Qwen3-0.6B # Student model 
 export REWARD_MODEL_PATH=./data/models/Qwen3-0.6B # Teacher model 
-export RESULT_DIR=./results/rl_factory/searchr1_agl
+export RESULT_DIR=./results/rl_factory/searchr1_multistep
 
 python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     algorithm.adv_estimator=grpo\
@@ -46,7 +45,7 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     actor_rollout_ref.rollout.enforce_eager=False\
     actor_rollout_ref.rollout.free_cache_engine=True\
     actor_rollout_ref.env.name=search\
-    actor_rollout_ref.env.tool_manager=searchr1_agl\
+    actor_rollout_ref.env.tool_manager=searchr1_multistep\
     actor_rollout_ref.env.enable_thinking=True\
     actor_rollout_ref.env.config_path=null\
     actor_rollout_ref.env.use_process_reward=False\
@@ -60,8 +59,8 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     algorithm.kl_ctrl.kl_coef=0.001\
     trainer.critic_warmup=0\
     trainer.logger=['console','wandb']\
-    trainer.project_name='SearchR1_with_RL-Factory_AGL'\
-    trainer.experiment_name='search_r1_Qwen3-0.6B_agl_msg'\
+    trainer.project_name='SearchR1_with_RL-Factory_Multistep'\
+    trainer.experiment_name='search_r1_Qwen3-0.6B_multistep'\
     trainer.n_gpus_per_node=4\
     trainer.nnodes=1\
     trainer.val_before_train=True\
@@ -69,4 +68,4 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     trainer.default_hdfs_dir=null\
     trainer.save_freq=40\
     trainer.test_freq=40\
-    trainer.total_training_steps=400 $@ 2>&1 | tee grpo_searchr1_agl.log
+    trainer.total_training_steps=400 $@ 2>&1 | tee grpo_searchr1_multistep.log
