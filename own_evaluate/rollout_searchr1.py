@@ -135,10 +135,10 @@ QWEN3_TOOL_SYSTEM_MSG = (
 # Action parsing
 # ---------------------------------------------------------------------------
 
-def extract_action(response: str, prompt_mode: str = "searchr1") -> Tuple[Optional[str], str]:
+def extract_action(response: str, prompt_mode: str = "agl") -> Tuple[Optional[str], str]:
     answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
 
-    if prompt_mode in ("searchr1", "searchr1_multiturn"):
+    if prompt_mode in ("agl", "searchr1", "searchr1_multistep"):
         match = re.search(r"<(search|answer)>(.*?)</\1>", response, re.DOTALL)
         if match:
             return match.group(1), match.group(2).strip()
@@ -186,43 +186,25 @@ _IM_END = "<|im_end|>"
 _THINK_PREFIX = "<think>\n\n</think>\n\n"
 
 
-def build_messages_searchr1(question: str, rollout_content: str) -> List[Dict[str, str]]:
+def build_messages_agl(question: str, rollout_content: str) -> List[Dict[str, str]]:
     prompt = INSTRUCTION_FORMAT + question
     return [{"role": "user", "content": prompt + rollout_content}]
 
 
-def build_messages_searchr1_multiturn(
-    question: str,
-    assistant_responses: List[str],
-    user_feedbacks: List[str],
-) -> List[Dict[str, str]]:
-    """Build messages in SearchR1 multi-turn format, matching RLF chat_scheduler training.
-
-    Uses proper multi-turn chat messages (system/user/assistant roles).
-    """
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": ""},
-        {"role": "user", "content": INSTRUCTION_FORMAT + question},
-    ]
-    for i, asst_resp in enumerate(assistant_responses):
-        messages.append({"role": "assistant", "content": asst_resp})
-        if i < len(user_feedbacks):
-            messages.append({"role": "user", "content": user_feedbacks[i]})
-    return messages
-
-
-def build_initial_prompt_searchr1_multiturn(question: str) -> str:
+def build_initial_prompt_rlf(question: str) -> str:
     """Build initial raw prompt matching RLF training's token-level format.
 
+    Used by both searchr1 and searchr1_multistep eval modes.
     Reproduces tokenizer.apply_chat_template(
         [{"role": "system", "content": ""},
          {"role": "user", "content": INSTRUCTION_FORMAT + question}],
         add_generation_prompt=True, enable_thinking=True, tokenize=False)
 
-    Subsequent turns are built by raw string concatenation:
-        accumulated += response + "<|im_end|>" + raw_info_text
-    matching the token-level concatenation in RLF training's ToolUtils
-    (no additional role markers between turns).
+    Subsequent turns differ by mode:
+        searchr1: accumulated += response + info_text
+            (raw concatenation, no role markers)
+        searchr1_multistep: accumulated += response + <|im_end|>\\n<|im_start|>user\\n
+            + info + <|im_end|>\\n<|im_start|>assistant\\n<think>\\n
     """
     return (
         f"{_IM_START}system\n"
@@ -281,7 +263,7 @@ def run_sample_rollout(
     max_turns: int = 4,
     max_tokens: int = 2048,
     retrieval_url: str = "http://127.0.0.1:8000/retrieve",
-    prompt_mode: str = "searchr1",
+    prompt_mode: str = "agl",
 ) -> Dict[str, Any]:
     """Run multi-turn inference, recording every raw input/output per turn."""
 
@@ -295,7 +277,7 @@ def run_sample_rollout(
 
     qwen3_asst_responses: List[str] = []
     qwen3_tool_responses: List[str] = []
-    # searchr1_multiturn mode: accumulated raw prompt (matches RLF token concatenation)
+    # searchr1/searchr1_multistep mode: accumulated raw prompt (matches RLF token concatenation)
     accumulated_prompt = ""
 
     t_start = time.time()
@@ -306,8 +288,8 @@ def run_sample_rollout(
             t_turn = time.time()
 
             # --- Build input ---
-            if prompt_mode == "searchr1":
-                messages = build_messages_searchr1(question, rollout_content)
+            if prompt_mode == "agl":
+                messages = build_messages_agl(question, rollout_content)
                 raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
                 resp = client.chat.completions.create(
                     model=model,
@@ -317,9 +299,9 @@ def run_sample_rollout(
                 )
                 raw_output = resp.choices[0].message.content or ""
                 usage = resp.usage
-            elif prompt_mode == "searchr1_multiturn":
+            elif prompt_mode in ("searchr1", "searchr1_multistep"):
                 if not accumulated_prompt:
-                    accumulated_prompt = build_initial_prompt_searchr1_multiturn(question)
+                    accumulated_prompt = build_initial_prompt_rlf(question)
                 raw_input = accumulated_prompt
                 resp = client.completions.create(
                     model=model,
@@ -369,7 +351,7 @@ def run_sample_rollout(
                 finished = True
                 if prompt_mode == "qwen3_tool":
                     qwen3_asst_responses.append(valid_resp)
-                elif prompt_mode == "searchr1_multiturn":
+                elif prompt_mode in ("searchr1", "searchr1_multistep"):
                     accumulated_prompt += raw_output
             elif action == "search":
                 search_queries.append(action_content)
@@ -378,11 +360,18 @@ def run_sample_rollout(
                 turn_record["retrieval_latency_s"] = round(time.time() - t_ret, 3)
                 turn_record["search_result"] = search_result
 
-                if prompt_mode == "searchr1":
+                if prompt_mode == "agl":
                     rollout_content += f"\n\n<information>{search_result}</information>\n\n"
-                elif prompt_mode == "searchr1_multiturn":
+                elif prompt_mode == "searchr1":
                     info_text = f"\n\n<information>{search_result}</information>\n\n"
-                    accumulated_prompt += raw_output + _IM_END + info_text
+                    accumulated_prompt += raw_output + info_text
+                    rollout_content += info_text
+                elif prompt_mode == "searchr1_multistep":
+                    info_text = f"\n\n<information>{search_result}</information>\n\n"
+                    accumulated_prompt += (raw_output + _IM_END + "\n"
+                                          + _IM_START + "user\n" + info_text
+                                          + _IM_END + "\n"
+                                          + _IM_START + "assistant\n<think>\n")
                     rollout_content += info_text
                 else:
                     qwen3_asst_responses.append(valid_resp)
@@ -390,21 +379,32 @@ def run_sample_rollout(
                     rollout_content += f"\n\n<tool_response>{search_result}</tool_response>\n\n"
             else:
                 # Invalid action
-                if prompt_mode == "searchr1":
+                if prompt_mode == "agl":
                     retry_msg = (
                         "\nMy previous action is invalid. If I want to search, I should put "
                         "the query between <search> and </search>. If I want to give the final "
                         "answer, I should put the answer between <answer> and </answer>. "
                         "Let me try again.\n"
                     )
-                elif prompt_mode == "searchr1_multiturn":
+                elif prompt_mode == "searchr1":
                     retry_msg = (
                         "\nMy previous action is invalid. If I want to search, I should put "
                         "the query between <search> and </search>. If I want to give the final "
                         "answer, I should put the answer between <answer> and </answer>. "
                         "Let me try again.\n"
                     )
-                    accumulated_prompt += raw_output + _IM_END + retry_msg
+                    accumulated_prompt += raw_output + retry_msg
+                elif prompt_mode == "searchr1_multistep":
+                    retry_msg = (
+                        "\nMy previous action is invalid. If I want to search, I should put "
+                        "the query between <search> and </search>. If I want to give the final "
+                        "answer, I should put the answer between <answer> and </answer>. "
+                        "Let me try again.\n"
+                    )
+                    accumulated_prompt += (raw_output + _IM_END + "\n"
+                                          + _IM_START + "user\n" + retry_msg
+                                          + _IM_END + "\n"
+                                          + _IM_START + "assistant\n<think>\n")
                 else:
                     retry_msg = (
                         "Your previous response did not contain a valid tool call or answer. "
@@ -421,8 +421,8 @@ def run_sample_rollout(
         if not finished:
             turn_id += 1
             t_turn = time.time()
-            if prompt_mode == "searchr1":
-                messages = build_messages_searchr1(question, rollout_content)
+            if prompt_mode == "agl":
+                messages = build_messages_agl(question, rollout_content)
                 raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
                 resp = client.chat.completions.create(
                     model=model,
@@ -432,7 +432,7 @@ def run_sample_rollout(
                 )
                 raw_output = resp.choices[0].message.content or ""
                 usage = resp.usage
-            elif prompt_mode == "searchr1_multiturn":
+            elif prompt_mode in ("searchr1", "searchr1_multistep"):
                 raw_input = accumulated_prompt
                 resp = client.completions.create(
                     model=model,
@@ -592,11 +592,12 @@ def main() -> None:
     parser.add_argument("--n-samples", type=int, default=100,
                         help="Number of samples to trace (default: 100)")
     parser.add_argument("--prompt-mode", type=str, default=None,
-                        choices=["searchr1", "searchr1_multiturn", "qwen3_tool"],
-                        help="Prompt format: 'searchr1' (AGL, single user msg), "
-                             "'searchr1_multiturn' (RLF, multi-turn chat), "
+                        choices=["agl", "searchr1", "searchr1_multistep", "qwen3_tool"],
+                        help="Prompt format: 'agl' (single user msg), "
+                             "'searchr1' (RLF raw concatenation), "
+                             "'searchr1_multistep' (RLF user->assistant turn alternation), "
                              "'qwen3_tool' (legacy RLF). "
-                             "Default: auto-detect from --label (rlf -> searchr1_multiturn, else searchr1)")
+                             "Default: auto-detect from --label")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=2048,
                         help="Max tokens per turn (default: 2048). Training has no per-turn limit.")
@@ -609,12 +610,13 @@ def main() -> None:
     args = parser.parse_args()
 
     # Auto-detect prompt mode from label
-    # AGL uses searchr1 (single user message), RLF uses searchr1_multiturn (proper multi-turn chat).
     if args.prompt_mode is None:
         if args.label == "rlf":
-            args.prompt_mode = "searchr1_multiturn"
-        else:
             args.prompt_mode = "searchr1"
+        elif args.label == "rlf_multistep":
+            args.prompt_mode = "searchr1_multistep"
+        else:
+            args.prompt_mode = "agl"
 
     if not os.path.exists(args.data_file):
         print(f"Error: Data file not found: {args.data_file}", file=sys.stderr)

@@ -52,7 +52,7 @@ python eval_searchr1.py \
     --output-dir eval_results
 ```
 
-`--label rlf` 会自动选择 `--prompt-mode searchr1_multiturn`。
+`--label rlf` 会自动选择 `--prompt-mode searchr1`。
 
 ### 主要参数
 
@@ -60,8 +60,8 @@ python eval_searchr1.py \
 |------|------|
 | `--endpoint` | vLLM API 地址，如 `http://localhost:8001/v1` |
 | `--model` | vLLM 中注册的模型名（需与 `vllm serve` 的路径一致） |
-| `--label` | 输出文件前缀，`agl` 或 `rlf`。`rlf` 会自动选择 `searchr1_multiturn` 模式 |
-| `--prompt-mode` | 手动指定 prompt 格式：`searchr1` / `searchr1_multiturn` / `qwen3_tool` |
+| `--label` | 输出文件前缀。`rlf` 自动选择 `searchr1` 模式，`rlf_multistep` 自动选择 `searchr1_multistep` 模式，其他默认 `agl` |
+| `--prompt-mode` | 手动指定 prompt 格式：`agl` / `searchr1` / `searchr1_multistep` / `qwen3_tool` |
 | `--n-samples` | 评测样本数（默认全部） |
 | `--max-turns` | 最大搜索轮数（默认 4） |
 | `--rollout-file` | 可选，指定小样本文件用于生成详细 rollout 报告 |
@@ -85,7 +85,7 @@ python rollout_searchr1.py \
     --model <checkpoint>_hf \
     --data-file data/test.parquet \
     --n-samples 100 \
-    --prompt-mode searchr1 \
+    --prompt-mode agl \
     --output-dir rollout_results
 ```
 
@@ -97,7 +97,7 @@ python rollout_searchr1.py \
     --model <checkpoint>_hf \
     --data-file data/test.parquet \
     --n-samples 100 \
-    --prompt-mode searchr1_multiturn \
+    --prompt-mode searchr1 \
     --output-dir rollout_results
 ```
 
@@ -119,13 +119,14 @@ python rollout_searchr1.py \
 
 评测时必须用和训练时一致的输入构造方式，否则模型看到的 token 序列分布不匹配，会导致准确率大幅下降。
 
-- `searchr1`：使用 Chat Completions API，匹配 AGL 训练
-- `searchr1_multiturn`：使用 Completions API + 手工 prompt 拼接，匹配 RLF `ToolUtils` 训练
+- `agl`：使用 Chat Completions API，匹配 AGL 训练
+- `searchr1`：使用 Completions API + 手工 prompt 拼接，匹配 RLF `searchr1` 训练
+- `searchr1_multistep`：使用 Completions API + user→assistant turn 交替，匹配 RLF `searchr1_multistep` 训练
 - `qwen3_tool`：使用 Completions API + 手工 ChatML prompt，匹配旧版 RLF tool-call 训练
 
 ---
 
-### `searchr1`（AGL 格式）
+### `agl`（AGL 格式）
 
 **对应 AGL 训练方式。** 所有内容拼接在一条 user 消息中，不使用多轮角色切换。
 
@@ -160,9 +161,9 @@ Answer the given question... Question: What is X?<search>query</search>
 
 ---
 
-### `searchr1_multiturn`（RLF 格式）
+### `searchr1`（RLF 格式）
 
-**对应 RLF `generate_sequences_loop` + `ToolUtils` 训练方式。** 使用 Completions API 发送手工拼接的原始 prompt 字符串，严格复现训练时 token 级拼接逻辑。
+**对应 RLF `generate_sequences_loop` + `ToolUtils` + `tool_manager=searchr1` 训练方式。** 使用 Completions API 发送手工拼接的原始 prompt 字符串，严格复现训练时 token 级拼接逻辑。
 
 #### 工作原理
 
@@ -283,12 +284,12 @@ Doc 1...
 
 ## 格式对比总结
 
-| 维度 | `searchr1` (AGL) | `searchr1_multiturn` (RLF) | `qwen3_tool` (旧版 RLF) |
-|------|---|---|---|
-| API | Chat Completions | **Completions** (raw prompt) | Completions (raw prompt) |
-| System 消息 | 无 | 有，内容为空（首轮 prompt 的一部分） | 有，包含 tool schema |
-| 多轮结构 | 单条 user 消息拼接全部历史 | **Token 级拼接**：首轮 chat template + 后续裸文本拼接 | 手工拼接多轮 ChatML tokens |
-| 搜索指令 | `<search>query</search>` | `<search>query</search>` | `<tool_call>{"name":...}</tool_call>` |
-| 搜索结果 | `<information>...</information>` | `<information>...</information>` | `<tool_response>...</tool_response>` |
-| 角色标记 | 每轮重新 apply（仅一条 user 消息） | 仅首轮有，后续无角色标记 | 每轮手工拼 ChatML 标记 |
-| enable_thinking | 不传 | 首轮 prompt 中包含 `<think>\n` | N/A（手工注入空 think block） |
+| 维度 | `agl` (AGL) | `searchr1` (RLF) | `searchr1_multistep` (RLF) | `qwen3_tool` (旧版 RLF) |
+|------|---|---|---|---|
+| API | Chat Completions | **Completions** (raw prompt) | **Completions** (raw prompt) | Completions (raw prompt) |
+| System 消息 | 无 | 有，内容为空 | 有，内容为空 | 有，包含 tool schema |
+| 多轮结构 | 单条 user 消息拼接全部历史 | Token 级拼接，后续裸文本 | Token 级拼接 + user→assistant 交替 | 手工拼接多轮 ChatML tokens |
+| 搜索指令 | `<search>query</search>` | `<search>query</search>` | `<search>query</search>` | `<tool_call>{"name":...}</tool_call>` |
+| 搜索结果 | `<information>...</information>` | `<information>...</information>` | `<information>...</information>` | `<tool_response>...</tool_response>` |
+| 角色标记 | 每轮重新 apply（仅一条 user 消息） | 仅首轮有，后续无角色标记 | 每轮有完整角色标记 | 每轮手工拼 ChatML 标记 |
+| enable_thinking | 不传 | 首轮 prompt 中包含 `<think>\n` | 每轮有 `<think>\n` | N/A（手工注入空 think block） |
