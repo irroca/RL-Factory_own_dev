@@ -29,7 +29,7 @@ MULTI_DOMAIN_SEARCH_INSTRUCTION = (
 )
 
 # Default retrieval server URL (overridable via config)
-DEFAULT_RETRIEVAL_URL = "http://127.0.0.1:8000"
+DEFAULT_RETRIEVAL_URL = "http://127.0.0.1:8001"
 
 
 def retrieve_doc_multi_domain(

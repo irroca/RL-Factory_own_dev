@@ -9,7 +9,7 @@
 # Prerequisites:
 #   1. Start the multi-domain retrieval server:
 #      cd /path/to/Search_agent_checkpoints/multi_domain_retriever
-#      bash multi_domain_launch.sh train 8000   # training data
+#      bash multi_domain_launch.sh train 8001   # training data
 #      (Optionally on another port for test data)
 #
 #   2. Prepare training data (if not already available):
@@ -28,7 +28,7 @@ export REWARD_MODEL_PATH=./data/models/Qwen3-0.6B  # Teacher model
 export RESULT_DIR=./results/rl_factory/multi_domain_search_aligned
 
 # Multi-domain retrieval server URL (must be started before training)
-export RETRIEVAL_URL=http://127.0.0.1:8000
+export RETRIEVAL_URL=http://127.0.0.1:8001
 
 # ---- Data paths ----
 # Option A: Use pre-built multi-domain parquet files
