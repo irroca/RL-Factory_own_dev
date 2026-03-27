@@ -40,6 +40,11 @@ class ToolUtils:
         self.loop_cnt = 0
 
         self.env_object = env_object
+
+        # Check if the tool_manager uses AGL-style full reprompt mode
+        self._reprompt_mode = getattr(
+            getattr(env_object, 'tool_manager', None), 'reprompt_mode', False
+        )
         
     def postprocess_output(self, output: DataProto, step: int):
         '''output: cpu'''
@@ -57,6 +62,23 @@ class ToolUtils:
                 prompt_token = self.init_prompt_token[idx]
                 prompt_token_list = prompt_token[prompt_token != self.pad_token_id].tolist()
                 self.loop_responses_token[idx].append(prompt_token_list)
+
+            # --- AGL reprompt mode: initialize per-sample state ---
+            if self._reprompt_mode:
+                tool_mgr = self.env_object.tool_manager
+                tool_mgr.reset_reprompt_state(self.batch_size)
+                for idx in range(self.batch_size):
+                    prompt_token = self.init_prompt_token[idx]
+                    valid_tokens = prompt_token[prompt_token != self.pad_token_id].tolist()
+                    prompt_text = self.tokenizer.decode(valid_tokens, skip_special_tokens=False)
+                    user_content = tool_mgr.extract_user_content(prompt_text)
+                    if user_content is None:
+                        logger.warning(
+                            f"[reprompt_mode] Could not extract user content from prompt "
+                            f"for sample {idx}. Falling back to full decoded prompt."
+                        )
+                        user_content = self.tokenizer.decode(valid_tokens, skip_special_tokens=True)
+                    tool_mgr.init_sample(idx, user_content)
         else:
             batch_idxs = output.meta_info['index']
 
@@ -91,20 +113,56 @@ class ToolUtils:
             step_scores = [0] * len(responses_str)
 
         # encode infos for next prompt
-        info_tokens = self.tokenizer(infos_str, truncation=True, max_length=self.max_tool_response_length).input_ids
         next_prompt_token = []
         next_prompt_length = []
         next_sample_idx = []
-        for idx, batch_idx in enumerate(batch_idxs):
-            if not dones[idx]:
-                info_token_list = info_tokens[idx]
-                self.loop_responses_token[batch_idx].append(info_token_list)
-                next_sample_idx.append(batch_idx)
-                promt_token = list(itertools.chain.from_iterable(self.loop_responses_token[batch_idx]))
-                next_prompt_token.append(promt_token)
-                next_prompt_length.append(len(promt_token))
-                # get process reward 
-                self.tool_use[batch_idx].append(step_scores[idx])
+
+        if self._reprompt_mode:
+            # --- AGL reprompt mode ---
+            # Instead of flat-concatenating info tokens, rebuild the full prompt
+            # from scratch each turn (matching AGL's single-user-message approach).
+            tool_mgr = self.env_object.tool_manager
+            for idx, batch_idx in enumerate(batch_idxs):
+                if not dones[idx]:
+                    # Build full re-encoded prompt
+                    reprompt_str = tool_mgr.accumulate_and_build_reprompt(
+                        batch_idx=batch_idx,
+                        response_text=responses_str[idx],
+                        info_text=infos_str[idx],
+                        tokenizer=self.tokenizer,
+                    )
+                    reprompt_tokens = self.tokenizer.encode(
+                        reprompt_str, add_special_tokens=False
+                    )
+
+                    # Store reprompt tokens in loop_responses_token for training
+                    # sequence assembly (replaces info_tokens in the standard flow).
+                    # Structure: [prompt1, resp1, prompt2, resp2, prompt3, resp3, ...]
+                    # Loss mask alternation still works: prompt2 → mask=0, resp2 → mask=1
+                    self.loop_responses_token[batch_idx].append(reprompt_tokens)
+
+                    next_sample_idx.append(batch_idx)
+                    # Use ONLY the reprompt as next inference prompt (NOT flat concat)
+                    next_prompt_token.append(reprompt_tokens)
+                    next_prompt_length.append(len(reprompt_tokens))
+                    self.tool_use[batch_idx].append(step_scores[idx])
+        else:
+            # --- Standard mode: flat concatenation ---
+            info_tokens = self.tokenizer(
+                infos_str, truncation=True,
+                max_length=self.max_tool_response_length
+            ).input_ids
+            for idx, batch_idx in enumerate(batch_idxs):
+                if not dones[idx]:
+                    info_token_list = info_tokens[idx]
+                    self.loop_responses_token[batch_idx].append(info_token_list)
+                    next_sample_idx.append(batch_idx)
+                    promt_token = list(itertools.chain.from_iterable(
+                        self.loop_responses_token[batch_idx]))
+                    next_prompt_token.append(promt_token)
+                    next_prompt_length.append(len(promt_token))
+                    # get process reward 
+                    self.tool_use[batch_idx].append(step_scores[idx])
         
         if len(next_prompt_token) == 0:
             return 

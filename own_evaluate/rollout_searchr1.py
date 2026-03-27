@@ -138,7 +138,7 @@ QWEN3_TOOL_SYSTEM_MSG = (
 def extract_action(response: str, prompt_mode: str = "agl") -> Tuple[Optional[str], str]:
     answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
 
-    if prompt_mode in ("agl", "searchr1", "searchr1_multistep"):
+    if prompt_mode in ("agl", "searchr1_agl", "searchr1", "searchr1_multistep"):
         match = re.search(r"<(search|answer)>(.*?)</\1>", response, re.DOTALL)
         if match:
             return match.group(1), match.group(2).strip()
@@ -288,9 +288,10 @@ def run_sample_rollout(
             t_turn = time.time()
 
             # --- Build input ---
-            if prompt_mode == "agl":
+            if prompt_mode in ("agl", "searchr1_agl"):
                 messages = build_messages_agl(question, rollout_content)
                 raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
+                rendered_input = _IM_START + "user\n" + messages[0]["content"] + _IM_END + "\n" + _IM_START + "assistant\n"
                 resp = client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -303,6 +304,7 @@ def run_sample_rollout(
                 if not accumulated_prompt:
                     accumulated_prompt = build_initial_prompt_rlf(question)
                 raw_input = accumulated_prompt
+                rendered_input = None
                 resp = client.completions.create(
                     model=model,
                     prompt=accumulated_prompt,
@@ -337,6 +339,7 @@ def run_sample_rollout(
             turn_record: Dict[str, Any] = {
                 "turn": turn_id,
                 "raw_input": raw_input,
+                "rendered_input": rendered_input,
                 "raw_output": raw_output,
                 "postprocessed_output": valid_resp,
                 "action": action,
@@ -360,7 +363,7 @@ def run_sample_rollout(
                 turn_record["retrieval_latency_s"] = round(time.time() - t_ret, 3)
                 turn_record["search_result"] = search_result
 
-                if prompt_mode == "agl":
+                if prompt_mode in ("agl", "searchr1_agl"):
                     rollout_content += f"\n\n<information>{search_result}</information>\n\n"
                 elif prompt_mode == "searchr1":
                     info_text = f"\n\n<information>{search_result}</information>\n\n"
@@ -379,7 +382,7 @@ def run_sample_rollout(
                     rollout_content += f"\n\n<tool_response>{search_result}</tool_response>\n\n"
             else:
                 # Invalid action
-                if prompt_mode == "agl":
+                if prompt_mode in ("agl", "searchr1_agl"):
                     retry_msg = (
                         "\nMy previous action is invalid. If I want to search, I should put "
                         "the query between <search> and </search>. If I want to give the final "
@@ -421,9 +424,10 @@ def run_sample_rollout(
         if not finished:
             turn_id += 1
             t_turn = time.time()
-            if prompt_mode == "agl":
+            if prompt_mode in ("agl", "searchr1_agl"):
                 messages = build_messages_agl(question, rollout_content)
                 raw_input = json.dumps(messages, ensure_ascii=False, indent=2)
+                rendered_input = _IM_START + "user\n" + messages[0]["content"] + _IM_END + "\n" + _IM_START + "assistant\n"
                 resp = client.chat.completions.create(
                     model=model,
                     messages=messages,
@@ -434,6 +438,7 @@ def run_sample_rollout(
                 usage = resp.usage
             elif prompt_mode in ("searchr1", "searchr1_multistep"):
                 raw_input = accumulated_prompt
+                rendered_input = None
                 resp = client.completions.create(
                     model=model,
                     prompt=accumulated_prompt,
@@ -447,6 +452,7 @@ def run_sample_rollout(
                 raw_input = build_raw_prompt_qwen3_tool(
                     question, qwen3_asst_responses, qwen3_tool_responses,
                 )
+                rendered_input = None
                 resp = client.completions.create(
                     model=model,
                     prompt=raw_input,
@@ -465,6 +471,7 @@ def run_sample_rollout(
             turns.append({
                 "turn": turn_id,
                 "raw_input": raw_input,
+                "rendered_input": rendered_input,
                 "raw_output": raw_output,
                 "postprocessed_output": raw_output,
                 "action": "forced_final",
@@ -547,6 +554,10 @@ def write_markdown_report(
                 f.write("**Raw Input (sent to model):**\n")
                 f.write(f"```\n{t['raw_input']}\n```\n\n")
 
+                if t.get("rendered_input"):
+                    f.write("**Rendered Input (after chat template, actual LLM input):**\n")
+                    f.write(f"```\n{t['rendered_input']}\n```\n\n")
+
                 f.write("**Raw Output (model response, unprocessed):**\n")
                 f.write(f"```\n{t['raw_output']}\n```\n\n")
 
@@ -592,8 +603,9 @@ def main() -> None:
     parser.add_argument("--n-samples", type=int, default=100,
                         help="Number of samples to trace (default: 100)")
     parser.add_argument("--prompt-mode", type=str, default=None,
-                        choices=["agl", "searchr1", "searchr1_multistep", "qwen3_tool"],
+                        choices=["agl", "searchr1_agl", "searchr1", "searchr1_multistep", "qwen3_tool"],
                         help="Prompt format: 'agl' (single user msg), "
+                             "'searchr1_agl' (AGL-aligned RLF, chat API eval), "
                              "'searchr1' (RLF raw concatenation), "
                              "'searchr1_multistep' (RLF user->assistant turn alternation), "
                              "'qwen3_tool' (legacy RLF). "
@@ -615,6 +627,8 @@ def main() -> None:
             args.prompt_mode = "searchr1"
         elif args.label == "rlf_multistep":
             args.prompt_mode = "searchr1_multistep"
+        elif args.label == "rlf_agl":
+            args.prompt_mode = "searchr1_agl"
         else:
             args.prompt_mode = "agl"
 

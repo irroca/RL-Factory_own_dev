@@ -1,7 +1,7 @@
 """
 Preprocess multi-domain QA datasets to parquet format for RL-Factory training.
 
-Supports loading QA data from HuggingFace or local JSONL files for each domain
+Supports loading QA data from HuggingFace, local JSONL files, or CSV files for each domain
 (biomedical, financial, science) and converts them to the unified parquet format
 expected by RL-Factory's RLHFDataset.
 
@@ -16,14 +16,27 @@ Usage:
         --train_files domain1_train.jsonl domain2_train.jsonl \
         --test_files domain1_test.jsonl domain2_test.jsonl
 
+    # From CSV files (columns: qid, pid, domain, source, query, relevant_passage, answer)
+    python scripts/multi_domain_search_data.py \
+        --local_dir ./data/multi_domain_search \
+        --from_csv \
+        --train_files /path/to/train.csv \
+        --test_files /path/to/test.csv
+
 Expected JSONL format per line:
     {"question": "What is type 2 diabetes?", "golden_answers": ["A metabolic disorder ..."], "domain": "biomedical"}
+
+Expected CSV columns:
+    qid, pid, domain, source, query, relevant_passage, answer
+    (answer is a string repr of a list, e.g. "['autosomal dominant']")
 """
 
 import os
+import ast
 import json
 import argparse
 
+import pandas as pd
 import datasets
 
 
@@ -39,6 +52,9 @@ MULTI_DOMAIN_SEARCH_INSTRUCTION = (
     "You can search as many times as you want, and you may search across different domains. "
     "If you find no further external knowledge needed, you can directly provide the answer "
     "inside <answer> and </answer>, without detailed illustrations. "
+    "For yes/no questions, you must answer with only \"yes\" or \"no\" inside the <answer> tag, "
+    "without any additional explanation. For example: <answer> yes </answer> or <answer> no </answer>. "
+    "For other questions, provide a concise factual answer. "
     "For example, to search for information: "
     "<search> What is insulin resistance? </search><domain> biomedical </domain>. "
     "To provide a final answer: <answer> Beijing </answer>. Question: "
@@ -105,6 +121,31 @@ def process_local_files(file_list, split, domains_str):
     return all_records
 
 
+def process_csv_files(file_list, split, domains_str):
+    """Process CSV files (with columns: qid, pid, domain, source, query, relevant_passage, answer)
+    into RL-Factory format. Deduplicates by qid (keeps first row per qid)."""
+    all_records = []
+    idx = 0
+    for fpath in file_list:
+        print(f"  Loading CSV: {fpath}")
+        df = pd.read_csv(fpath)
+        # Deduplicate by qid — same qid has same query/answer but different passages
+        df_dedup = df.drop_duplicates(subset=['qid'], keep='first')
+        print(f"    {len(df)} rows -> {len(df_dedup)} unique questions (deduplicated by qid)")
+        for _, row in df_dedup.iterrows():
+            question = row['query']
+            # answer is stored as string repr of list, e.g. "['autosomal dominant']"
+            golden_answers = ast.literal_eval(row['answer'])
+            if isinstance(golden_answers, str):
+                golden_answers = [golden_answers]
+            domain = row['domain']
+            data_source = f"multi_domain_{domain}"
+            record = build_record(question, golden_answers, domain, data_source, split, idx, domains_str)
+            all_records.append(record)
+            idx += 1
+    return all_records
+
+
 def process_hf_datasets(domains_str):
     """Load and process QA datasets from HuggingFace for each domain."""
     train_records = []
@@ -120,7 +161,7 @@ def process_hf_datasets(domains_str):
             if split_name in ds:
                 for item in ds[split_name]:
                     question = item.get("question", "")
-                    answer = item.get("long_answer", item.get("final_decision", ""))
+                    answer = item.get("final_decision", "")
                     if not question or not answer:
                         continue
                     record = build_record(
@@ -163,6 +204,38 @@ def process_hf_datasets(domains_str):
     except Exception as e:
         print(f"  Warning: Could not load science data: {e}")
 
+    # --- Financial: Use FinQA from local JSON files ---
+    try:
+        finqa_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'finqa')
+        for split_name in ["train", "test"]:
+            fpath = os.path.join(finqa_dir, f"{split_name}.json")
+            if not os.path.exists(fpath):
+                print(f"  FinQA: 跳过 {split_name}（文件不存在: {fpath}）")
+                continue
+            print(f"Loading financial QA data (FinQA {split_name})...")
+            with open(fpath, 'r', encoding='utf-8') as f:
+                finqa_data = json.load(f)
+            target = train_records if split_name == "train" else test_records
+            for item in finqa_data:
+                qa = item.get("qa", {})
+                question = qa.get("question", "").strip()
+                answer = str(qa.get("exe_ans", "")).strip()
+                if not question or not answer:
+                    continue
+                cur_idx = train_idx if split_name == "train" else test_idx
+                record = build_record(
+                    question, [answer], "financial", "multi_domain_financial",
+                    split_name, cur_idx, domains_str
+                )
+                target.append(record)
+                if split_name == "train":
+                    train_idx += 1
+                else:
+                    test_idx += 1
+            print(f"  FinQA {split_name}: added {len(finqa_data)} records")
+    except Exception as e:
+        print(f"  Warning: Could not load FinQA data: {e}")
+
     return train_records, test_records
 
 
@@ -172,18 +245,24 @@ def main():
                         help='Output directory for parquet files')
     parser.add_argument('--from_local', action='store_true',
                         help='Load from local JSONL files instead of HuggingFace')
+    parser.add_argument('--from_csv', action='store_true',
+                        help='Load from CSV files (columns: qid, pid, domain, source, query, relevant_passage, answer)')
     parser.add_argument('--train_files', nargs='+', default=[],
-                        help='Local JSONL files for training data')
+                        help='Local JSONL/CSV files for training data')
     parser.add_argument('--test_files', nargs='+', default=[],
-                        help='Local JSONL files for test data')
+                        help='Local JSONL/CSV files for test data')
     parser.add_argument('--domains', nargs='+', default=DOMAINS,
                         help='Domain names to include')
 
     args = parser.parse_args()
     domains_str = ", ".join(args.domains)
 
-    if args.from_local:
-        print(f"Loading from local files...")
+    if args.from_csv:
+        print(f"Loading from CSV files...")
+        train_records = process_csv_files(args.train_files, 'train', domains_str)
+        test_records = process_csv_files(args.test_files, 'test', domains_str)
+    elif args.from_local:
+        print(f"Loading from local JSONL files...")
         train_records = process_local_files(args.train_files, 'train', domains_str)
         test_records = process_local_files(args.test_files, 'test', domains_str)
     else:
