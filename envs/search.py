@@ -100,6 +100,8 @@ class SearchEnv(Env):
     def _compute_score_with_rules(self, data, tokenizer, if_val=False):
         if self.reward_mode == 'multi_dim':
             return self._compute_score_multi_dim(data, tokenizer, if_val)
+        elif self.reward_mode == 'format_reward':
+            return self._compute_score_format_reward(data, tokenizer, if_val)
         else:
             return self._compute_score_agl(data, tokenizer, if_val)
 
@@ -133,6 +135,69 @@ class SearchEnv(Env):
             processed_data = self._process_data(data_item=data_item, tokenizer=tokenizer)
             ground_truth, response_str = processed_data['ground_truth'], processed_data['response_str']
             score = compute_score_em(response_str, ground_truth)
+            scores.append([score])
+
+        return scores
+
+    # =========================================================================
+    # Format Reward: 4-way reward (Empirical Study, arXiv:2505.15117)
+    #   correct + good format  → 1.0
+    #   correct + bad format   → 1.0 - λ_f
+    #   wrong   + good format  → max(λ_f, 0.1)   (floor 0.1, DynaSearcher)
+    #   wrong   + bad format   → 0.0
+    # =========================================================================
+    def _compute_score_format_reward(self, data, tokenizer, if_val=False):
+        lambda_f = 0.2
+
+        def _check_format(solution_str):
+            """Check whether the response has valid tag structure.
+
+            Validates:
+            - <answer> tags alternate properly (required)
+            - <search> tags alternate properly (if present)
+            - <think> tags alternate properly (if present)
+            """
+            answer_ok = _check_alternate_tags(solution_str, r"</?answer>")
+            if not answer_ok:
+                return False
+            search_tags = re.findall(r'</?search>', solution_str)
+            if search_tags:
+                if not _check_alternate_tags(solution_str, r"</?search>"):
+                    return False
+            think_tags = re.findall(r'</?think>', solution_str)
+            if think_tags:
+                if not _check_alternate_tags(solution_str, r"</?think>"):
+                    return False
+            return True
+
+        def compute_score(solution_str, ground_truth):
+            answer = _extract_solution(solution_str=solution_str)
+            do_print = random.randint(1, 64) == 1
+
+            if do_print:
+                print(f"--------------------------------")
+                print(f"[format_reward] Golden answers: {ground_truth['target']}")
+                print(f"[format_reward] Extracted answer: {answer}")
+                print(f"[format_reward] Solution string: {solution_str[:200]}...")
+
+            format_ok = _check_format(solution_str)
+            em_correct = answer is not None and _em_check(answer, ground_truth['target'])
+
+            if em_correct and format_ok:
+                return 1.0
+            elif em_correct and not format_ok:
+                return 1.0 - lambda_f
+            elif not em_correct and format_ok:
+                return max(lambda_f, 0.1)
+            else:
+                return 0.0
+
+        scores = []
+        for i in range(len(data)):
+            data_item = data[i]
+            processed_data = self._process_data(data_item=data_item, tokenizer=tokenizer)
+            ground_truth, response_str = processed_data['ground_truth'], processed_data['response_str']
+            score = compute_score(response_str, ground_truth)
             scores.append([score])
 
         return scores

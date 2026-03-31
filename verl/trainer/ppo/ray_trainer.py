@@ -881,7 +881,6 @@ class RayPPOTrainer:
             all_data_sources = np.concatenate(data_source_lst, axis=0)
             all_scores_arr = np.array(sample_scores)
 
-            from collections import defaultdict
             domain_scores_map = defaultdict(list)
             domain_turns_map = defaultdict(list)
 

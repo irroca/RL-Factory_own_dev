@@ -29,7 +29,7 @@ set -e -x
 
 export MODEL_PATH=./data/models/Qwen3-0.6B # Student model 
 export REWARD_MODEL_PATH=./data/models/Qwen3-0.6B # Teacher model 
-export RESULT_DIR=/scratch/azureml/cr/j/67c9cb676caf4c9daa27e59f014d7dd8/exe/wd/Search_agent_data/RLF_checkpoints/rl_factory/search_r1_agl
+export RESULT_DIR=/scratch/azureml/cr/j/67c9cb676caf4c9daa27e59f014d7dd8/exe/wd/Search_agent_data/RLF_checkpoints/rl_factory/search_r1_agl_new
 
 python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     algorithm.adv_estimator=grpo\
@@ -53,7 +53,7 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16\
     actor_rollout_ref.rollout.tensor_model_parallel_size=1\
     actor_rollout_ref.rollout.name=vllm\
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.75\
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.50\
     actor_rollout_ref.rollout.n=5\
     actor_rollout_ref.rollout.max_turns=4\
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16\
@@ -67,7 +67,7 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     actor_rollout_ref.env.use_process_reward=False\
     reward_rollout.if_use_reward_rollout=False\
     reward_rollout.rollout.tensor_model_parallel_size=4\
-    reward_rollout.rollout.gpu_memory_utilization=0.75\
+    reward_rollout.rollout.gpu_memory_utilization=0.50\
     reward_rollout.rollout.model_name=$REWARD_MODEL_PATH\
     reward_rollout.rollout.free_cache_engine=True\
     reward_rollout.rollout.response_length=2048\

@@ -1,5 +1,37 @@
 # Change Log
 
+## 2026-03-31: Format Reward 模式（单域 SearchR1）
+
+### 新增 `format_reward` 奖励模式
+
+基于论文 *An Empirical Study on RL for Reasoning-Search Interleaved LLM Agents* (arXiv:2505.15117) 的4-way format reward设计 + *DynaSearcher* (arXiv:2507.17365) 的格式正确底分思路，在 `envs/search.py` 中新增 `format_reward` 奖励模式。
+
+**4-way 奖励表（λ_f=0.2）：**
+
+| 条件 | 奖励 |
+|------|------|
+| EM正确 + 格式正确 | 1.0 |
+| EM正确 + 格式错误 | 0.8 |
+| EM错误 + 格式正确 | 0.2（底分保证非零梯度） |
+| EM错误 + 格式错误 | 0.0 |
+
+**格式校验内容：**
+- `<answer>` 标签交替合法（必须）
+- `<search>` 标签交替合法（如果存在）
+- `<think>` 标签交替合法（如果存在）
+
+复用已有的 `_check_alternate_tags()` 进行无嵌套、正确配对检查。
+
+**使用方式：**
+```bash
+bash main_grpo_searchr1.sh actor_rollout_ref.env.reward_mode=format_reward
+```
+
+**改动文件：**
+- `envs/search.py`：新增 `_compute_score_format_reward()` 方法，`_compute_score_with_rules()` 新增 `format_reward` 分支
+
+---
+
 ## 2026-03-30: 多领域数据集构建与领域均衡采样
 
 ### 多领域训练数据集
