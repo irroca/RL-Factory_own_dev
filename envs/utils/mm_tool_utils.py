@@ -283,11 +283,15 @@ class MMToolUtils(ToolUtils):
         image_list = np.array([{"image": img} for img in self.image_list], dtype=object)
         modal_inputs = np.array([inputs[0] for inputs in multi_modal_inputs])
         
+        # Compute per-sample num_turns (number of search/tool calls)
+        num_turns = np.array([len(tu) for tu in self.tool_use], dtype=np.float64)
+
         final_output = DataProto(
             batch=final_batch,
             non_tensor_batch={
                 'multi_modal_data': image_list, 
-                "multi_modal_inputs": modal_inputs
+                "multi_modal_inputs": modal_inputs,
+                "__num_turns__": num_turns,
             }
         )
         print("[Final Compose] finish final compose", flush=True, file=sys.stderr)

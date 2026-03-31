@@ -272,5 +272,8 @@ class ToolUtils:
             batch_size=self.batch_size,
         )  
 
-        final_output = DataProto(batch=final_batch)
+        # Compute per-sample num_turns (number of search/tool calls)
+        num_turns = np.array([len(tu) for tu in self.tool_use], dtype=np.float64)
+
+        final_output = DataProto(batch=final_batch, non_tensor_batch={"__num_turns__": num_turns})
         return final_output
