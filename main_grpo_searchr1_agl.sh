@@ -29,12 +29,12 @@ set -e -x
 
 export MODEL_PATH=./data/models/Qwen3-0.6B # Student model 
 export REWARD_MODEL_PATH=./data/models/Qwen3-0.6B # Teacher model 
-export RESULT_DIR=./results/rl_factory/searchr1_agl
+export RESULT_DIR=/scratch/azureml/cr/j/67c9cb676caf4c9daa27e59f014d7dd8/exe/wd/Search_agent_data/RLF_checkpoints/rl_factory/search_r1_agl
 
 python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     algorithm.adv_estimator=grpo\
-    data.train_files=/scratch/azureml/cr/j/7e6b762e2e0d44f990d5daffc11d8310/exe/wd/agent-lightning/contrib/recipes/search_r1/data/train.parquet\
-    data.val_files=/scratch/azureml/cr/j/7e6b762e2e0d44f990d5daffc11d8310/exe/wd/Search_agent_checkpoints/test_dev_2000.parquet\
+    data.train_files=/scratch/azureml/cr/j/67c9cb676caf4c9daa27e59f014d7dd8/exe/wd/agent-lightning/contrib/recipes/search_r1/data/train.parquet\
+    data.val_files=/scratch/azureml/cr/j/67c9cb676caf4c9daa27e59f014d7dd8/exe/wd/Search_agent_data/test_dev_2000.parquet\
     data.train_batch_size=128\
     data.max_prompt_length=4096\
     data.max_response_length=4096\

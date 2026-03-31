@@ -869,10 +869,39 @@ class RayPPOTrainer:
             metric_dict["val-aux/num_turns/max"] = sample_turns.max()
             metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
             metric_dict["val/turn_count"] = sample_turns.mean()
+            metric_dict["val/search_count"] = sample_turns.mean()
 
         # Add val/reward: average reward across all validation samples
         if len(sample_scores) > 0:
             metric_dict["val/reward"] = np.mean(sample_scores)
+            metric_dict["val/accuracy"] = np.mean(sample_scores)
+
+        # Per-domain validation accuracy and search count
+        if len(sample_scores) > 0 and len(data_source_lst) > 0:
+            all_data_sources = np.concatenate(data_source_lst, axis=0)
+            all_scores_arr = np.array(sample_scores)
+
+            from collections import defaultdict
+            domain_scores_map = defaultdict(list)
+            domain_turns_map = defaultdict(list)
+
+            for idx, ds in enumerate(all_data_sources):
+                domain = str(ds).replace("multi_domain_", "")
+                if idx < len(all_scores_arr):
+                    domain_scores_map[domain].append(all_scores_arr[idx])
+
+            if len(sample_turns) > 0:
+                for idx, ds in enumerate(all_data_sources):
+                    domain = str(ds).replace("multi_domain_", "")
+                    if idx < len(sample_turns):
+                        domain_turns_map[domain].append(float(sample_turns[idx]))
+
+            for domain, scores_list in sorted(domain_scores_map.items()):
+                metric_dict[f"val/accuracy/{domain}"] = np.mean(scores_list)
+                metric_dict[f"val/count/{domain}"] = len(scores_list)
+
+            for domain, turns_list in sorted(domain_turns_map.items()):
+                metric_dict[f"val/search_count/{domain}"] = np.mean(turns_list)
 
         return metric_dict
 

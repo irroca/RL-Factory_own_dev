@@ -190,6 +190,29 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         metrics["num_turns/max"] = num_turns.max()
         metrics["num_turns/mean"] = num_turns.mean()
 
+        # per-domain search count (num_turns is the proxy for search count)
+        if "data_source" in batch.non_tensor_batch:
+            data_sources = batch.non_tensor_batch["data_source"]
+            from collections import defaultdict
+            domain_turns = defaultdict(list)
+            for ds, nt in zip(data_sources, num_turns):
+                # "multi_domain_biomedical" -> "biomedical"
+                domain = str(ds).replace("multi_domain_", "")
+                domain_turns[domain].append(float(nt))
+            for domain, turns in sorted(domain_turns.items()):
+                metrics[f"search_count/{domain}/mean"] = np.mean(turns)
+
+    # per-domain score for training step
+    if "data_source" in batch.non_tensor_batch:
+        data_sources = batch.non_tensor_batch["data_source"]
+        from collections import defaultdict
+        domain_scores_map = defaultdict(list)
+        for ds, sc in zip(data_sources, sequence_score.detach().cpu().tolist()):
+            domain = str(ds).replace("multi_domain_", "")
+            domain_scores_map[domain].append(sc)
+        for domain, sc_list in sorted(domain_scores_map.items()):
+            metrics[f"train_score/{domain}/mean"] = np.mean(sc_list)
+
     return metrics
 
 

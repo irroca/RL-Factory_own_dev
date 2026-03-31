@@ -47,7 +47,7 @@ export RETRIEVAL_URL=http://127.0.0.1:8001
 # ---- Data paths ----
 # Option A: Use pre-built multi-domain parquet files
 TRAIN_DATA=./data/multi_domain_search/train.parquet
-VAL_DATA=./data/multi_domain_search/test.parquet
+VAL_DATA=./data/multi_domain_search/test_2000.parquet
 
 # Option B (fallback): Use same data as SearchR1 for testing the pipeline
 # TRAIN_DATA=/scratch/azureml/cr/j/7e6b762e2e0d44f990d5daffc11d8310/exe/wd/agent-lightning/contrib/recipes/search_r1/data/train.parquet
@@ -60,6 +60,14 @@ python3 -m verl.trainer.main_ppo --config-name=rl_factory_ppo_trainer \
     data.train_batch_size=128\
     data.max_prompt_length=4096\
     data.max_response_length=4096\
+    data.sampler.class_path=pkg://verl.experimental.dataset.domain_weighted_sampler\
+    data.sampler.class_name=DomainWeightedSampler\
+    data.sampler.strategy=custom\
+    data.sampler.domain_key=data_source\
+    data.sampler.domain_weights.biomedical=2\
+    data.sampler.domain_weights.financial=1\
+    data.sampler.domain_weights.science=1\
+    data.dataloader_num_workers=0\
     actor_rollout_ref.model.path=$MODEL_PATH\
     actor_rollout_ref.model.use_remove_padding=True\
     actor_rollout_ref.model.enable_gradient_checkpointing=True\

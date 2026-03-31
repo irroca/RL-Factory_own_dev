@@ -1,5 +1,112 @@
 # Change Log
 
+## 2026-03-30: 多领域数据集构建与领域均衡采样
+
+### 多领域训练数据集
+
+训练数据由 5 个跨 3 领域的 QA 数据集合并而成，完整处理管线位于 `Search_agent_data/data_preprocess/`。
+
+**数据来源与规模：**
+
+| 数据集 | 领域 | train 行数 | test 行数 | 来源说明 |
+|--------|------|-----------|----------|---------|
+| PubMedQA | biomedical | 169,724 | 42,438 | 生物医学问答，answer 为 yes/no/maybe |
+| BioASQ | biomedical | 209 | 117 | 生物医学抽取式问答 |
+| FinQA | financial | 6,214 | 1,203 | 金融数值推理，answer 为数值 |
+| OminEval | financial | 1,079 | 452 | 金融抽取式问答（中文） |
+| SciQ | science | 9,751 | 2,447 | 科学多选问答 |
+
+**合并后按领域统计：**
+
+| 领域 | train | test | 占比 |
+|------|-------|------|------|
+| biomedical | 169,933 | 42,555 | 90.9% |
+| science | 9,751 | 2,447 | 5.2% |
+| financial | 7,293 | 1,655 | 3.9% |
+| **合计** | **186,977** | **46,657** | |
+
+**处理管线（`data_preprocess/`）：**
+
+1. `preprocess_{bioasq,pubmedqa,omnieval,finqa,sciq}.py` — 各数据集清洗、去重、去泄漏，统一为 `query, relevant_passage, answer` 格式
+2. `merge_datasets.py` — 合并为 `merged_dataset/{train,test}.{csv,jsonl}`，分配 `qid`/`pid`，添加 `domain`/`source` 字段
+3. `build_kb.py` — 按 domain 生成知识库 JSONL（`multi_domain_dataset/knowledge_base/`）
+4. `prepare_retriever_corpus.py` — 转换为检索器 corpus 格式（`multi_domain_retriever/data/`）
+5. `build_faiss_index.py` — 基于 multilingual-e5-base 构建 FAISS 索引
+6. `scripts/multi_domain_search_data.py`（RL-Factory 侧）— 从 JSONL 生成训练用 parquet（`data/multi_domain_search/`）
+
+一键重建：`bash rebuild_all.sh`
+
+**数据完整性验验证结果：**
+- 所有 processed → merged → knowledge_base → retriever corpus 行数链路一致 ✅
+- FAISS 索引大小精确匹配 `向量数 × 768 × 4 bytes` ✅
+- BioASQ/OminEval/FinQA 已做 train/test query 去泄漏 ✅
+- PubMedQA（10 条）和 SciQ（27 条）存在轻微 query 重叠（随机 split，未做 query 级去泄漏）
+
+### 领域均衡采样器（DomainWeightedSampler）
+
+**问题：** 数据集严重不均衡，biomedical 占 90.9%，默认 `RandomSampler` 下 financial/science 领域被严重欠采样。
+
+**方案：** 实现 `DomainWeightedSampler`，通过 `sampler.class_path` 扩展点注入，不改变训练代码。
+
+**新增文件：**
+
+| 文件 | 说明 |
+|------|------|
+| `verl/experimental/dataset/domain_weighted_sampler.py` | `DomainWeightedSampler` 类，继承 `AbstractSampler` |
+
+**修改文件：**
+
+| 文件 | 修改内容 |
+|------|----------|
+| `verl/trainer/config/data/legacy_data.yaml` | `sampler` 下新增 `strategy`、`domain_key`、`domain_weights`、`temperature` 字段定义（Hydra struct 要求预声明） |
+| `main_grpo_multi_domain_search.sh` | 添加 sampler 配置参数、`val_batch_size=128` |
+
+**支持三种策略：**
+
+| 策略 | 配置 | 效果 |
+|------|------|------|
+| `equal` | `strategy=equal` | 三领域等概率采样（各 33.3%） |
+| `custom` | `strategy=custom` + `domain_weights` | 自定义权重，如 bio:fin:sci = 2:1:1 → 50%:25%:25% |
+| `temperature` | `strategy=temperature` + `temperature=T` | $w_i \propto n_i^{1/T}$，T 越大越均衡 |
+
+**训练脚本中配置示例（当前默认 custom 2:1:1）：**
+
+```bash
+data.sampler.class_path=pkg://verl.experimental.dataset.domain_weighted_sampler
+data.sampler.class_name=DomainWeightedSampler
+data.sampler.strategy=custom
+data.sampler.domain_key=data_source
+data.sampler.domain_weights.biomedical=2
+data.sampler.domain_weights.financial=1
+data.sampler.domain_weights.science=1
+data.dataloader_num_workers=0   # 自定义 sampler 要求
+```
+
+**200 步 × batch 128 下的采样分析（custom 2:1:1）：**
+
+| 领域 | 数据量 | 采样权重 | 预期采样数 | 重复次数 |
+|------|--------|---------|-----------|---------|
+| biomedical | 169,933 | 50% | ~12,800 | 0.08× |
+| science | 9,751 | 25% | ~6,400 | 0.66× |
+| financial | 7,293 | 25% | ~6,400 | 0.88× |
+
+三个领域的数据在 200 步内均无需重复采样。
+
+**命令行切换策略：**
+
+```bash
+# 等权
+data.sampler.strategy=equal
+
+# 温度平滑 T=3（bio 58.7%, sci 22.7%, fin 20.6%）
+data.sampler.strategy=temperature data.sampler.temperature=3.0
+
+# 自定义权重
+data.sampler.strategy=custom data.sampler.domain_weights.biomedical=3
+```
+
+---
+
 ## 2026-03-27: searchr1_agl 模式改为完全对齐 AGL（full reprompt）
 
 ### 背景

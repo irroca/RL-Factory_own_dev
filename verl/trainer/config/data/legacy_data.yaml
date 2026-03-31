@@ -97,6 +97,22 @@ sampler:
   # the name of the curriculum class like `MySampler`
   class_name: null
 
+  # Domain-weighted sampler settings (used by DomainWeightedSampler)
+  # strategy: equal | custom | temperature
+  strategy: null
+
+  # column name in parquet that identifies the domain
+  domain_key: data_source
+
+  # per-domain weights for strategy=custom (keys without "multi_domain_" prefix)
+  domain_weights:
+    biomedical: 1
+    financial: 1
+    science: 1
+
+  # temperature for strategy=temperature
+  temperature: 3.0
+
 # Data generation configuration for augmenting the dataset.
 datagen:
 
