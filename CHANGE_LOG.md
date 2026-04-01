@@ -1,5 +1,50 @@
 # Change Log
 
+## 2026-04-01: 修复 searchr1_agl 多轮搜索失效 — 添加 `</search>` / `</answer>` Stop Strings
+
+### 问题
+
+RLF 的 `searchr1_agl` 模式在训练 rollout 时几乎只搜索一次，而 AGL 框架可以正常进行多次搜索。
+
+**根因：** vLLM 的 stop strings 仅包含 `["<|im_end|>"]`，不包含 `</search>` 和 `</answer>`。模型在单个 turn 内生成最多 4096 tokens，会同时输出 `<search>` 和 `<answer>`，然后 `parse_response()` 优先匹配 `<answer>` → `done=True` → 循环结束。
+
+| 对比项 | AGL | RLF（修复前） |
+|--------|-----|---------------|
+| 每 turn max_tokens | **500** | **4096** |
+| Stop strings | N/A（chat API + `postprocess_response` 截断） | `["<|im_end|>"]` — 无 `</search>` |
+| 结果 | 每 turn 一个动作 | 整个推理链在一个 turn 内完成 |
+
+### 修复方案
+
+在 `main_grpo_searchr1_agl.sh` 中覆盖 stop strings，添加 `</search>` 和 `</answer>` 作为 vLLM 的 stop string，并启用 `include_stop_str_in_output=True`（确保 response 中包含 stop string 本身，否则 `parse_response()` 的正则无法匹配）。
+
+在 `rl_factory_ppo_trainer.yaml` 中预声明 `include_stop_str_in_output` 字段（Hydra struct 要求）。
+
+**修复后每 turn 行为：**
+
+| Turn | vLLM 生成 | 停止原因 | `parse_response` 结果 |
+|------|-----------|----------|----------------------|
+| 1 | `<think>...<search>query</search>` | `</search>` 触发停止 | `('actions', [...])` → 继续 |
+| N | `<think>...<answer>xxx</answer>` | `</answer>` 触发停止 | `('answer', ...)` → 结束 |
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `main_grpo_searchr1_agl.sh` | 新增 `stop='["<\|im_end\|>","</search>","</answer>"]'` 和 `include_stop_str_in_output=True` |
+| `verl/trainer/config/rl_factory_ppo_trainer.yaml` | `rollout` 下新增 `include_stop_str_in_output: False` 默认值 |
+
+### 使用方式
+
+```bash
+# 无需额外参数，脚本已内置正确的 stop strings
+bash main_grpo_searchr1_agl.sh
+```
+
+> **注意**：此修复仅应用于 `searchr1_agl` 脚本。其他模式（`searchr1`、`searchr1_multistep`、`multi_domain_search`）如需同样行为，需手动添加相同的 stop 配置。
+
+---
+
 ## 2026-03-31: Format Reward 模式（单域 SearchR1）
 
 ### 新增 `format_reward` 奖励模式

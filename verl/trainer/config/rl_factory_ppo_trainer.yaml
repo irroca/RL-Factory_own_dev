@@ -12,6 +12,7 @@ actor_rollout_ref:
     temperature: 0.7
     max_turns: 2
     stop: ["<|im_end|>",]
+    include_stop_str_in_output: False
     tool_response_length: 16384
     val_kwargs:
       top_p: 0.95
