@@ -195,7 +195,10 @@ class ToolUtils:
         next_data = DataProto(batch=next_batch, non_tensor_batch={'raw_prompt_ids': raw_prompt_ids})
         next_data.meta_info.update(self.meta_info)
         next_data.meta_info['index'] = next_sample_idx
-        next_data.meta_info['do_sample'] = False # step > 0 does not do sample
+        # Keep sampling in subsequent turns to maintain exploration (matching AGL behavior).
+        # Previously do_sample=False forced greedy decoding from turn 2+, causing the model
+        # to always pick <answer> over <search> whenever <answer> had slightly higher prob.
+        next_data.meta_info['do_sample'] = True
         self.loop_cnt += 1
 
         return next_data

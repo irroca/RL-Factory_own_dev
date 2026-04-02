@@ -1,5 +1,31 @@
 # Change Log
 
+## 2026-04-01: 修复多轮搜索第二轮后强制贪心解码 — 保持采样探索
+
+### 问题
+
+`tool_utils.py` 中 `do_sample=False`（第 198 行）在 step > 0 时强制贪心解码（`temperature=0`），导致模型从第二轮开始只要 `<answer>` 概率略高于 `<search>` 就直接终止，平均搜索轮数明显下降。
+
+而 AGL 框架在每轮都使用相同 temperature 调用 `chat.completions`，保持探索性。
+
+| 对比项 | AGL | RLF（修复前） |
+|--------|-----|---------------|
+| Turn 1 解码 | 采样（temperature > 0） | 采样 |
+| Turn 2+ 解码 | **采样（同 temperature）** | **贪心（temperature=0）** |
+| 效果 | 模型有机会继续搜索 | 模型倾向于直接输出 answer |
+
+### 修复
+
+将 `tool_utils.py` 中 `next_data.meta_info['do_sample'] = False` 改为 `True`，使后续轮次保持与第一轮相同的采样参数（top_p、temperature 等），对齐 AGL 行为。
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `envs/utils/tool_utils.py` | `do_sample` 从 `False` 改为 `True` |
+
+---
+
 ## 2026-04-01: 修复 searchr1_agl 多轮搜索失效 — 添加 `</search>` / `</answer>` Stop Strings
 
 ### 问题
