@@ -64,7 +64,38 @@ python eval_searchr1.py \
 | `--prompt-mode` | 手动指定 prompt 格式：`agl` / `searchr1` / `searchr1_multistep` / `qwen3_tool` |
 | `--n-samples` | 评测样本数（默认全部） |
 | `--max-turns` | 最大搜索轮数（默认 4） |
+| `--temperature` | 生成温度（默认 0.0，即贪心解码）。训练时为 0.7 |
+| `--top-p` | Top-p 采样参数（默认 1.0）。训练时 RLF 为 0.95，AGL 为 1.0 |
+| `--use-train-stops` | 添加 `</search>` 和 `</answer>` 作为 vLLM stop strings 并启用 `include_stop_str_in_output=True`，与训练时 addstopstring 配置对齐。不加此 flag 时，模型可能在一轮内生成完整推理链，与训练行为不一致 |
 | `--rollout-file` | 可选，指定小样本文件用于生成详细 rollout 报告 |
+
+### 评测超参数对齐说明
+
+训练和评测的采样参数需保持一致以确保训推对齐。不同评测模式下的默认参数如下：
+
+| 参数 | 训练 (RLF) | 训练 (AGL) | 标准评测（默认） | 训推对齐评测 |
+|------|-----------|-----------|----------------|------------|
+| temperature | 0.7 | 0.7 | **0.0** | 0.0 |
+| top_p | 0.95 | 1.0 | **1.0** | 1.0 |
+| stop strings | `["<\|im_end\|>","</search>","</answer>"]` | N/A（chat API） | `["<\|im_end\|>"]` | **`["<\|im_end\|>","</search>","</answer>"]`** |
+| include_stop_str_in_output | True | N/A | False | **True** |
+
+> **注意**：`--use-train-stops` 是训推对齐的关键参数。没有此 flag 时，vLLM 不会在 `</search>` 处停止生成，模型会在一轮内自行续写搜索结果（自问自答），environment 无法注入真实检索结果。addstopstring_dosample 训练的模型**必须**使用此 flag 评测才能体现多轮搜索行为。
+
+### 评测 addstopstring_dosample 训练的模型
+
+```bash
+# 必须加 --use-train-stops 以对齐训练时的 stop strings 行为
+python eval_searchr1.py \
+    --endpoint http://localhost:8001/v1 \
+    --model <checkpoint>_hf \
+    --data-file data/test.parquet \
+    --n-samples 5000 \
+    --label rlf_pure_em \
+    --prompt-mode searchr1 \
+    --use-train-stops \
+    --output-dir eval_results
+```
 
 ### 输出文件
 

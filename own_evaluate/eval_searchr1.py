@@ -325,6 +325,8 @@ def evaluate_sample(
     max_tokens: int = 2048,
     retrieval_url: str = "http://127.0.0.1:8000/retrieve",
     prompt_mode: str = "agl",
+    use_train_stops: bool = False,
+    top_p: float = 1.0,
 ) -> Dict[str, Any]:
     """Run multi-turn inference on one sample and compute metrics.
 
@@ -359,6 +361,16 @@ def evaluate_sample(
     # searchr1/searchr1_multistep mode: accumulated raw prompt (matches RLF token concatenation)
     accumulated_prompt = ""
 
+    # Build API call parameters for train-aligned stop strings
+    completions_stops = [_IM_END, "<|endoftext|>"]
+    completions_extra: Dict[str, Any] = {}
+    chat_extra: Dict[str, Any] = {}
+    if use_train_stops:
+        completions_stops.extend(["</search>", "</answer>"])
+        completions_extra["extra_body"] = {"include_stop_str_in_output": True}
+        chat_extra["stop"] = ["</search>", "</answer>"]
+        chat_extra["extra_body"] = {"include_stop_str_in_output": True}
+
     t_start = time.time()
 
     try:
@@ -377,6 +389,8 @@ def evaluate_sample(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    top_p=top_p,
+                    **chat_extra,
                 )
                 raw = resp.choices[0].message.content or ""
                 usage = resp.usage
@@ -390,7 +404,9 @@ def evaluate_sample(
                     prompt=accumulated_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stop=[_IM_END, "<|endoftext|>"],
+                    stop=completions_stops,
+                    top_p=top_p,
+                    **completions_extra,
                 )
                 raw = resp.choices[0].text or ""
                 usage = resp.usage
@@ -405,7 +421,9 @@ def evaluate_sample(
                     prompt=raw_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stop=[_IM_END, "<|endoftext|>"],
+                    stop=completions_stops,
+                    top_p=top_p,
+                    **completions_extra,
                 )
                 raw = resp.choices[0].text or ""
                 usage = resp.usage
@@ -519,6 +537,8 @@ def evaluate_sample(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    top_p=top_p,
+                    **chat_extra,
                 )
                 raw = resp.choices[0].message.content or ""
                 usage = resp.usage
@@ -530,7 +550,9 @@ def evaluate_sample(
                     prompt=accumulated_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stop=[_IM_END, "<|endoftext|>"],
+                    stop=completions_stops,
+                    top_p=top_p,
+                    **completions_extra,
                 )
                 raw = resp.choices[0].text or ""
                 usage = resp.usage
@@ -545,7 +567,9 @@ def evaluate_sample(
                     prompt=raw_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stop=[_IM_END, "<|endoftext|>"],
+                    stop=completions_stops,
+                    top_p=top_p,
+                    **completions_extra,
                 )
                 raw = resp.choices[0].text or ""
                 usage = resp.usage
@@ -820,6 +844,14 @@ def main() -> None:
                              "'searchr1_multistep' for user→assistant turn alternation (RLF searchr1_multistep), "
                              "'qwen3_tool' for <tool_call> format (legacy RLF). "
                              "Default: auto from --label.")
+    parser.add_argument("--use-train-stops", action="store_true",
+                        help="Add </search> and </answer> as vLLM stop strings with "
+                             "include_stop_str_in_output=True, matching training with "
+                             "addstopstring. Without this flag, model may generate past "
+                             "action tags in a single turn (train-eval mismatch).")
+    parser.add_argument("--top-p", type=float, default=1.0,
+                        help="Top-p (nucleus) sampling parameter (default: 1.0). "
+                             "Training uses 0.95. Set to match training for consistency.")
     args = parser.parse_args()
 
     # Auto-detect prompt mode from label
@@ -865,6 +897,8 @@ def main() -> None:
             max_tokens=args.max_tokens,
             retrieval_url=args.retrieval_url,
             prompt_mode=args.prompt_mode,
+            use_train_stops=args.use_train_stops,
+            top_p=args.top_p,
         )
         results.append(record)
 
@@ -880,6 +914,8 @@ def main() -> None:
     metrics["max_turns"] = args.max_turns
     metrics["data_file"] = args.data_file
     metrics["prompt_mode"] = args.prompt_mode
+    metrics["use_train_stops"] = args.use_train_stops
+    metrics["top_p"] = args.top_p
 
     print_metrics_report(metrics, args.label, args.model)
 
@@ -923,6 +959,8 @@ def main() -> None:
                 max_tokens=args.max_tokens,
                 retrieval_url=args.retrieval_url,
                 prompt_mode=args.prompt_mode,
+                use_train_stops=args.use_train_stops,
+                top_p=args.top_p,
             )
             rollout_results.append(rec)
             em_icon = "\u2705" if rec.get("em_score", 0) > 0 else "\u274c"
